@@ -52,7 +52,7 @@ class MarketSnapshot(Base):
     @classmethod
     def create_from_market(cls, market):
         """Create snapshot from Market object"""
-        from clustering_engine import Market
+        from market import Market
         
         session = SessionLocal()
         try:
