@@ -71,6 +71,11 @@ class MarketSnapshot(Base):
             
             session.add(snapshot)
             session.commit()
+            
+            # --- ADD THIS LINE ---
+            session.refresh(snapshot) 
+            # ---------------------
+            
             return snapshot
             
         except Exception as e:
@@ -78,7 +83,8 @@ class MarketSnapshot(Base):
             raise e
         finally:
             session.close()
-    
+
+
     @classmethod
     def get_history(cls, market_id: str, hours: int = 6) -> List['MarketSnapshot']:
         """Get historical snapshots for a market"""
