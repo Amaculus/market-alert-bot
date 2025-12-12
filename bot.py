@@ -11,6 +11,7 @@ import schedule
 from datetime import datetime, timezone
 from typing import List, Dict
 import logging
+import threading  # ADDED: For non-blocking initial check
 
 from models import init_db, MarketSnapshot
 from api_clients import MarketAggregator
@@ -54,6 +55,7 @@ class MarketMonitor:
         self.min_volume_tier_c = float(os.getenv('MIN_VOLUME_TIER_C', '250000'))
         
         # ABSOLUTE FLOOR: Ignore anything below this before DB/Clustering
+        # Using 50000.0 to allow Tier S markets to proceed.
         self.absolute_min_volume = 50000.0
         
         logger.info(f"Monitor initialized with {self.check_interval_minutes}min check interval")
@@ -155,6 +157,7 @@ class MarketMonitor:
         
         # Event proximity
         if market.event_date:
+            # FIX: Ensure datetime.now() is timezone aware to prevent TypeError
             days_until = (market.event_date - datetime.now(timezone.utc)).days
             if 3 <= days_until <= 7:
                 signals['event_proximity'] = days_until
@@ -201,8 +204,6 @@ class MarketMonitor:
     def _evaluate_signals(self, market, snapshot, signals: Dict) -> HotMarket:
         """Evaluate signals and determine if market warrants alert"""
         
-        # NOTE: Volume is already checked in the loop above for clusters,
-        # but we check again here for safety and logic flow.
         lowest_threshold = min(
             self.min_volume_tier_s, 
             self.min_volume_tier_a, 
@@ -228,28 +229,23 @@ class MarketMonitor:
         tier = AlertTier.BACKGROUND
         
         # Tier 1: URGENT
-        # Massive volume spike (300%+ in 1h)
         if signals.get('volume_spike_1h', 0) > 3.0:
             triggered_signals.append('volume_spike_300_1h')
             tier = AlertTier.URGENT
         
-        # Dramatic odds swing (20%+ in 1h for top topics)
         if topic_info['tier'] == 'S' and signals.get('odds_movement_1h', 0) > 0.20:
             triggered_signals.append('odds_swing_20_1h')
             tier = AlertTier.URGENT
         
         # Tier 2: DAILY
-        # Sustained volume growth (200%+ over 6h)
         if signals.get('volume_spike_6h', 0) > 2.0 and tier != AlertTier.URGENT:
             triggered_signals.append('sustained_volume_growth')
             tier = AlertTier.DAILY
         
-        # Event proximity (3-7 days)
         if signals.get('event_proximity') and tier == AlertTier.BACKGROUND:
             triggered_signals.append(f"event_in_{signals['event_proximity']}_days")
             tier = AlertTier.DAILY
         
-        # Significant odds movement (15%+ over 6h)
         if signals.get('odds_movement_6h', 0) > 0.15 and tier == AlertTier.BACKGROUND:
             triggered_signals.append('odds_movement_15_6h')
             tier = AlertTier.DAILY
@@ -283,15 +279,12 @@ class MarketMonitor:
     def _process_alerts(self, hot_markets: List[HotMarket]) -> None:
         """Process and send alerts for hot markets"""
         
-        # Separate by tier
         urgent = [m for m in hot_markets if m.tier == AlertTier.URGENT]
         daily = [m for m in hot_markets if m.tier == AlertTier.DAILY]
         
-        # Send urgent alerts (real-time, rate limited)
         if urgent:
             self.alert_manager.send_urgent_alerts(urgent)
         
-        # Queue daily alerts for digest
         if daily:
             self.alert_manager.queue_for_digest(daily)
     
@@ -316,27 +309,35 @@ def main():
     """Main entry point - runs the bot"""
     logger.info("="*60)
     logger.info("PREDICTION MARKET ALERT BOT")
-    # ... (rest of logging setup) ...
+    logger.info("="*60)
+    logger.info(f"Environment: {os.getenv('RAILWAY_ENVIRONMENT', 'development')}")
+    logger.info(f"Slack webhook configured: {bool(os.getenv('SLACK_WEBHOOK_URL'))}")
     
     # Initialize monitor
     monitor = MarketMonitor()
     
-    # --- SEPARATE INITIAL CHECK LOGIC ---
-    logger.info("Running initial market check (Blocking)...")
-    monitor.check_markets()
-    logger.info("Initial market check COMPLETE. Starting scheduler.")
-    # ------------------------------------
-    
     # Schedule tasks
     check_interval = monitor.check_interval_minutes
+    
+    # 1. Schedule periodic checks
     logger.info(f"Scheduling market checks every {check_interval} minutes")
     schedule.every(check_interval).minutes.do(monitor.check_markets)
     
-    # Schedule digests (9 AM and 5 PM)
-    # ... (rest of scheduling logic) ...
+    # 2. Schedule digests
+    morning_time = os.getenv('MORNING_DIGEST_TIME', '09:00')
+    evening_time = os.getenv('EVENING_DIGEST_TIME', '17:00')
+    logger.info(f"Scheduling morning digest at {morning_time}")
+    schedule.every().day.at(morning_time).do(monitor.send_morning_digest)
+    logger.info(f"Scheduling evening digest at {evening_time}")
+    schedule.every().day.at(evening_time).do(monitor.send_evening_digest)
     
-    # Main loop
-    logger.info("Bot is now running. Press Ctrl+C to stop.")
+    # 3. Run initial check in a separate thread (Non-Blocking)
+    logger.info("Running initial market check in non-blocking thread...")
+    initial_thread = threading.Thread(target=monitor.check_markets)
+    initial_thread.start()
+    
+    # Main loop (Starts immediately, preventing platform timeout/re-fork)
+    logger.info("Bot is now running. Scheduler loop active.")
     logger.info("="*60)
     
     while True:
@@ -349,6 +350,7 @@ def main():
         except Exception as e:
             logger.error(f"Error in main loop: {e}", exc_info=True)
             time.sleep(60)
+
 
 if __name__ == "__main__":
     main()
