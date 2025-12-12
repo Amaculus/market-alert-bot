@@ -11,7 +11,7 @@ import logging
 from typing import List
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import multiprocessing
 
 from market import Market
@@ -95,7 +95,7 @@ class ClusteringEngine:
             
             # Rule of thumb: 1 worker per 0.5GB available RAM, capped by CPUs
             max_workers_by_ram = int(available_ram_gb / 0.5)
-            max_workers_by_cpu = min(16, max(1, cpu_count - 1))  # Cap at 16
+            max_workers_by_cpu = min(8, max(1, cpu_count - 1))  # Cap at 16
             
             self.max_workers = min(max_workers_by_ram, max_workers_by_cpu)
             
@@ -142,7 +142,7 @@ class ClusteringEngine:
         results = []
         
         # 2. Parallel Processing
-        with ProcessPoolExecutor(max_workers=self.max_workers) as executor:
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = [executor.submit(_process_chunk, chunk, self.threshold) for chunk in chunks]
             
             for future in as_completed(futures):
