@@ -10,7 +10,7 @@ import re
 from typing import Dict
 import logging
 from openai import OpenAI
-
+from models import TopicCache
 logger = logging.getLogger(__name__)
 
 
@@ -65,6 +65,23 @@ class RelevanceChecker:
                 'topic': str
             }
         """
+        # --- OPTIMIZATION START ---
+        # 1. Check Database Cache
+        # (Ensure you import TopicCache from models at the top of the file)
+        try:
+            from models import TopicCache
+            cached = TopicCache.get(market_title)
+            if cached:
+                return {
+                    'is_relevant': cached.is_relevant,
+                    'tier': cached.tier,
+                    'reasoning': cached.reasoning,
+                    'topic': self._extract_topic(market_title)
+                }
+        except Exception as e:
+            # Log but don't crash if cache fails (e.g. table doesn't exist yet)
+            logger.warning(f"Cache lookup failed: {e}")
+        # --- OPTIMIZATION END ---
         
         # Extract main topic from title
         topic = self._extract_topic(market_title)
@@ -72,29 +89,39 @@ class RelevanceChecker:
         # Quick check against known lists
         title_lower = market_title.lower()
         
+        # Helper to cache results
+        def cache_and_return(result):
+            try:
+                from models import TopicCache
+                TopicCache.set(market_title, result)
+            except Exception as e:
+                logger.warning(f"Failed to cache result: {e}")
+            return result
+        
         # Check Tier S keywords
         for keyword in self.tier_s_keywords:
             if keyword in title_lower:
-                return {
+                return cache_and_return({
                     'is_relevant': True,
                     'tier': 'S',
                     'reasoning': f'High-value topic: {keyword}',
                     'topic': topic
-                }
+                })
         
         # Check irrelevant keywords
         for keyword in self.irrelevant_keywords:
             if keyword in title_lower:
-                return {
+                return cache_and_return({
                     'is_relevant': False,
                     'tier': 'C',
                     'reasoning': f'Low-value topic: {keyword}',
                     'topic': topic
-                }
+                })
         
         # Use AI for everything else
         if self.client:
-            return self._check_with_ai(market_title, topic)
+            result = self._check_with_ai(market_title, topic)
+            return cache_and_return(result)
         else:
             # Fallback: moderate tier
             return {

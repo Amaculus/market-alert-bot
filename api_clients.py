@@ -43,7 +43,7 @@ class KalshiClient:
     def get_all_markets(
         self, 
         status: str = "open",
-        limit: int = 1000
+        limit: int = 50000  # CHANGED: Increased from 1000 to 50000
     ) -> List[Market]:
         """
         Fetch all markets from Kalshi
@@ -58,30 +58,48 @@ class KalshiClient:
         markets = []
         cursor = None
         
+        print(f"Fetching Kalshi markets (limit: {limit})...")
+        
         while True:
+            # API limit is 200 per page
+            batch_size = 200
+            remaining = limit - len(markets)
+            
+            if remaining <= 0:
+                break
+                
             params = {
-                "limit": min(limit - len(markets), 200),  # API limit is 200
+                "limit": min(remaining, batch_size),
                 "status": status
             }
             
             if cursor:
                 params["cursor"] = cursor
             
-            response = self.session.get(
-                f"{self.BASE_URL}/markets",
-                params=params
-            )
-            response.raise_for_status()
-            data = response.json()
-            
-            # Process markets
-            for market_data in data.get("markets", []):
-                market = self._parse_market(market_data)
-                markets.append(market)
-            
-            # Check if there are more results
-            cursor = data.get("cursor")
-            if not cursor or len(markets) >= limit:
+            try:
+                response = self.session.get(
+                    f"{self.BASE_URL}/markets",
+                    params=params
+                )
+                response.raise_for_status()
+                data = response.json()
+                
+                # Process markets
+                batch = data.get("markets", [])
+                if not batch:
+                    break
+                    
+                for market_data in batch:
+                    market = self._parse_market(market_data)
+                    markets.append(market)
+                
+                # Check if there are more results
+                cursor = data.get("cursor")
+                if not cursor:
+                    break
+                    
+            except Exception as e:
+                print(f"Error fetching Kalshi page: {e}")
                 break
         
         print(f"Fetched {len(markets)} markets from Kalshi")
@@ -150,7 +168,7 @@ class PolymarketClient:
         self,
         active: bool = True,
         closed: bool = False,
-        limit: int = 1000
+        limit: int = 50000  # CHANGED: Increased from 1000 to 50000
     ) -> List[Market]:
         """
         Fetch all markets from Polymarket
@@ -167,6 +185,8 @@ class PolymarketClient:
         offset = 0
         page_size = 100
         
+        print(f"Fetching Polymarket markets (limit: {limit})...")
+        
         while len(markets) < limit:
             # Use Gamma API for market data
             params = {
@@ -175,29 +195,38 @@ class PolymarketClient:
                 "archived": "false" if active else "true"
             }
             
-            response = self.session.get(
-                f"{self.GAMMA_URL}/markets",
-                params=params
-            )
-            
-            if response.status_code != 200:
-                print(f"Error fetching Polymarket markets: {response.status_code}")
+            try:
+                response = self.session.get(
+                    f"{self.GAMMA_URL}/markets",
+                    params=params
+                )
+                
+                if response.status_code != 200:
+                    print(f"Error fetching Polymarket markets: {response.status_code}")
+                    break
+                
+                data = response.json()
+                
+                if not data:
+                    break
+                
+                for market_data in data:
+                    market = self._parse_market(market_data)
+                    if market:
+                        markets.append(market)
+                
+                if len(data) < page_size:
+                    break
+                
+                offset += page_size
+                
+                # Optional: print progress for large fetches
+                if len(markets) % 1000 == 0:
+                    print(f"  Fetched {len(markets)} so far...")
+                    
+            except Exception as e:
+                print(f"Error in Polymarket fetch loop: {e}")
                 break
-            
-            data = response.json()
-            
-            if not data:
-                break
-            
-            for market_data in data:
-                market = self._parse_market(market_data)
-                if market:
-                    markets.append(market)
-            
-            if len(data) < page_size:
-                break
-            
-            offset += page_size
         
         print(f"Fetched {len(markets)} markets from Polymarket")
         return markets
