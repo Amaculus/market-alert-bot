@@ -12,7 +12,7 @@ requests==2.31.0
 openai==1.54.3
 
 # NLP (for clustering if needed)
-spacy==3.7.2
+
 python-slugify==8.0.1
 fuzzywuzzy==0.18.0
 python-Levenshtein==0.23.0
