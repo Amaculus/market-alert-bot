@@ -6,6 +6,7 @@ to our unified Market format for clustering.
 """
 
 import requests
+import time
 from typing import List, Dict, Optional
 from datetime import datetime
 from market import Market
@@ -43,17 +44,10 @@ class KalshiClient:
     def get_all_markets(
         self, 
         status: str = "open",
-        limit: int = 50000  # CHANGED: Increased from 1000 to 50000
+        limit: int = 50000
     ) -> List[Market]:
         """
-        Fetch all markets from Kalshi
-        
-        Args:
-            status: Market status filter ('open', 'closed', 'settled')
-            limit: Maximum number of markets to fetch
-            
-        Returns:
-            List of Market objects
+        Fetch all markets from Kalshi with rate limit handling
         """
         markets = []
         cursor = None
@@ -76,31 +70,53 @@ class KalshiClient:
             if cursor:
                 params["cursor"] = cursor
             
-            try:
-                response = self.session.get(
-                    f"{self.BASE_URL}/markets",
-                    params=params
-                )
-                response.raise_for_status()
-                data = response.json()
-                
-                # Process markets
-                batch = data.get("markets", [])
-                if not batch:
+            # Retry loop for 429 Rate Limits
+            success = False
+            for attempt in range(5):
+                try:
+                    response = self.session.get(
+                        f"{self.BASE_URL}/markets",
+                        params=params
+                    )
+                    
+                    # Handle Rate Limiting (429)
+                    if response.status_code == 429:
+                        wait_time = 2 ** attempt  # 1s, 2s, 4s, 8s, 16s
+                        print(f"  Kalshi Rate Limit hit. Sleeping {wait_time}s...")
+                        time.sleep(wait_time)
+                        continue
+                    
+                    response.raise_for_status()
+                    data = response.json()
+                    success = True
                     break
                     
-                for market_data in batch:
-                    market = self._parse_market(market_data)
-                    markets.append(market)
-                
-                # Check if there are more results
-                cursor = data.get("cursor")
-                if not cursor:
+                except requests.exceptions.RequestException as e:
+                    print(f"  Error fetching Kalshi page: {e}")
+                    # If it's not a rate limit, we might want to skip or break
+                    # For now, let's break the retry loop and try to exit
                     break
-                    
-            except Exception as e:
-                print(f"Error fetching Kalshi page: {e}")
+            
+            if not success:
+                print("  Failed to fetch page after retries. Stopping.")
                 break
+
+            # Process markets
+            batch = data.get("markets", [])
+            if not batch:
+                break
+                
+            for market_data in batch:
+                market = self._parse_market(market_data)
+                markets.append(market)
+            
+            # Check if there are more results
+            cursor = data.get("cursor")
+            if not cursor:
+                break
+                
+            # Courtesy sleep between pages
+            time.sleep(0.2)
         
         print(f"Fetched {len(markets)} markets from Kalshi")
         return markets
@@ -156,7 +172,6 @@ class KalshiClient:
 class PolymarketClient:
     """Client for Polymarket API"""
     
-    # Polymarket uses CLOB (Central Limit Order Book) API
     BASE_URL = "https://clob.polymarket.com"
     GAMMA_URL = "https://gamma-api.polymarket.com"
     
@@ -168,18 +183,10 @@ class PolymarketClient:
         self,
         active: bool = True,
         closed: bool = False,
-        limit: int = 50000  # CHANGED: Increased from 1000 to 50000
+        limit: int = 50000
     ) -> List[Market]:
         """
-        Fetch all markets from Polymarket
-        
-        Args:
-            active: Include active markets
-            closed: Include closed markets
-            limit: Maximum number of markets to fetch
-            
-        Returns:
-            List of Market objects
+        Fetch all markets from Polymarket with pagination
         """
         markets = []
         offset = 0
@@ -188,7 +195,6 @@ class PolymarketClient:
         print(f"Fetching Polymarket markets (limit: {limit})...")
         
         while len(markets) < limit:
-            # Use Gamma API for market data
             params = {
                 "limit": page_size,
                 "offset": offset,
@@ -200,6 +206,12 @@ class PolymarketClient:
                     f"{self.GAMMA_URL}/markets",
                     params=params
                 )
+                
+                # Simple rate limit check for Polymarket too
+                if response.status_code == 429:
+                    print("  Polymarket Rate Limit. Sleeping 2s...")
+                    time.sleep(2)
+                    continue
                 
                 if response.status_code != 200:
                     print(f"Error fetching Polymarket markets: {response.status_code}")
@@ -220,9 +232,11 @@ class PolymarketClient:
                 
                 offset += page_size
                 
-                # Optional: print progress for large fetches
                 if len(markets) % 1000 == 0:
                     print(f"  Fetched {len(markets)} so far...")
+                
+                # Courtesy sleep
+                time.sleep(0.1)
                     
             except Exception as e:
                 print(f"Error in Polymarket fetch loop: {e}")
@@ -234,11 +248,9 @@ class PolymarketClient:
     def _parse_market(self, data: Dict) -> Optional[Market]:
         """Convert Polymarket market data to our Market format"""
         
-        # Skip if no question
         if not data.get("question"):
             return None
         
-        # Parse event date
         event_date = None
         if data.get("end_date_iso"):
             try:
@@ -248,25 +260,17 @@ class PolymarketClient:
             except:
                 pass
         
-        # Parse odds - Polymarket uses different formats
         current_odds = {}
-        
-        # Try to get outcome prices
         if data.get("outcomes"):
             outcomes = data["outcomes"]
-            if len(outcomes) == 2:  # Binary market
-                # Prices are in the format "0.xx" representing probability
+            if len(outcomes) == 2:
                 current_odds = {
                     "yes": float(data.get("outcomePrices", ["0.5", "0.5"])[0]),
                     "no": float(data.get("outcomePrices", ["0.5", "0.5"])[1])
                 }
         
-        # Extract tags
-        tags = []
-        if data.get("tags"):
-            tags = data["tags"]
+        tags = data.get("tags", [])
         
-        # Get volume (convert from string if needed)
         volume = 0
         if data.get("volume"):
             try:
@@ -281,7 +285,7 @@ class PolymarketClient:
             title=data.get("question", ""),
             subtitle=data.get("description"),
             category=tags[0] if tags else None,
-            series_ticker=None,  # Polymarket doesn't have series tickers
+            series_ticker=None,
             tags=tags,
             current_odds=current_odds,
             volume=volume,
@@ -312,13 +316,6 @@ class MarketAggregator:
         kalshi_email: Optional[str] = None,
         kalshi_password: Optional[str] = None
     ):
-        """
-        Initialize market aggregator
-        
-        Args:
-            kalshi_email: Kalshi account email (optional)
-            kalshi_password: Kalshi account password (optional)
-        """
         self.kalshi = KalshiClient(kalshi_email, kalshi_password)
         self.polymarket = PolymarketClient()
     
@@ -329,18 +326,7 @@ class MarketAggregator:
         kalshi_status: str = "open",
         polymarket_active: bool = True
     ) -> List[Market]:
-        """
-        Fetch markets from all enabled platforms
-        
-        Args:
-            include_kalshi: Fetch from Kalshi
-            include_polymarket: Fetch from Polymarket
-            kalshi_status: Status filter for Kalshi markets
-            polymarket_active: Only active Polymarket markets
-            
-        Returns:
-            Combined list of markets from all platforms
-        """
+        """Fetch markets from all enabled platforms"""
         all_markets = []
         
         if include_kalshi:
@@ -363,26 +349,6 @@ class MarketAggregator:
         
         return all_markets
 
-
-# Example usage
 if __name__ == "__main__":
-    # Initialize aggregator
     aggregator = MarketAggregator()
-    
-    # Fetch markets
-    print("Fetching markets from APIs...")
     markets = aggregator.fetch_all_markets()
-    
-    # Display sample markets
-    print("\n" + "="*60)
-    print("SAMPLE MARKETS")
-    print("="*60)
-    
-    for market in markets[:5]:
-        print(f"\n{market.platform.upper()}: {market.title}")
-        print(f"  ID: {market.market_id}")
-        print(f"  Series: {market.series_ticker}")
-        print(f"  Odds: {market.current_odds}")
-        print(f"  Volume: ${market.volume:,.0f}")
-        print(f"  Category: {market.category}")
-        print(f"  Tags: {market.tags}")
