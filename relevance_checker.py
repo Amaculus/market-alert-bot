@@ -1,8 +1,5 @@
 """
-AI-Powered Topic Relevance Checker
-
-Uses OpenAI API to determine if a prediction market topic is relevant
-for sports/entertainment betting content sites.
+AI-Powered Topic Relevance Checker with Static Rules Optimization
 """
 
 import os
@@ -11,12 +8,153 @@ from typing import Dict
 import logging
 from openai import OpenAI
 from models import TopicCache
+
 logger = logging.getLogger(__name__)
 
-
 class RelevanceChecker:
-    """Checks if market topics are relevant using AI"""
-    
+    """Checks if market topics are relevant using Regex first, then AI"""
+
+    # --- STATIC RULES CONFIGURATION ---
+    # format: 'keyword': ('Tier', 'Reason')
+    STATIC_RELEVANCE_RULES = {
+        # === POLITICS (Tier S) ===
+        'trump': ('S', 'US Politics'),
+        'donald trump': ('S', 'US Politics'),
+        'vance': ('S', 'US Politics'),
+        'jd vance': ('S', 'US Politics'),
+        'kamala': ('S', 'US Politics'),
+        'harris': ('S', 'US Politics'),
+        'election': ('S', 'Politics'),
+        'president': ('S', 'Politics'),
+        'senate': ('S', 'Politics'),
+
+        # === SPORTS: NFL (Tier S/A) ===
+        'nfl': ('S', 'League'),
+        'super bowl': ('S', 'Major Event'),
+        'mahomes': ('S', 'Star Player'),
+        'kelce': ('S', 'Star Player'),
+        'lamar jackson': ('A', 'Star Player'),
+        'josh allen': ('A', 'Star Player'),
+        'burrow': ('A', 'Star Player'),
+        'rodgers': ('A', 'Star Player'),
+        'dak prescott': ('A', 'Star Player'),
+        'cj stroud': ('A', 'Star Player'),
+        'hurts': ('A', 'Star Player'),
+        'purdy': ('A', 'Star Player'),
+
+        # === SPORTS: NBA (Tier S/A) ===
+        'nba': ('S', 'League'),
+        'finals': ('S', 'Major Event'),
+        'lebron': ('S', 'Star Player'),
+        'james': ('S', 'Star Player'),  # Context dependent, but usually LeBron in this feed
+        'curry': ('S', 'Star Player'),
+        'steph': ('S', 'Star Player'),
+        'durant': ('A', 'Star Player'),
+        'giannis': ('A', 'Star Player'),
+        'jokic': ('A', 'Star Player'),
+        'luka': ('A', 'Star Player'),
+        'doncic': ('A', 'Star Player'),
+        'tatum': ('A', 'Star Player'),
+        'wembanyama': ('A', 'Star Player'),
+        'wemby': ('A', 'Star Player'),
+        'edwards': ('A', 'Star Player'), # Anthony Edwards
+
+        # === SPORTS: MLB (Tier A/S) ===
+        'mlb': ('S', 'League'),
+        'world series': ('S', 'Major Event'),
+        'ohtani': ('S', 'Global Star'),
+        'shohei': ('S', 'Global Star'),
+        'judge': ('A', 'Star Player'),
+        'harper': ('A', 'Star Player'),
+        'soto': ('A', 'Star Player'),
+        'mookie': ('A', 'Star Player'),
+        'betts': ('A', 'Star Player'),
+
+        # === SPORTS: SOCCER (Tier A/S) ===
+        'soccer': ('A', 'Sport'),
+        'premier league': ('A', 'League'),
+        'champions league': ('A', 'Major Event'),
+        'world cup': ('S', 'Global Event'),
+        'messi': ('S', 'Global Star'),
+        'ronaldo': ('S', 'Global Star'),
+        'mbappe': ('S', 'Star Player'),
+        'haaland': ('A', 'Star Player'),
+        'bellingham': ('A', 'Star Player'),
+        'yamal': ('A', 'Star Player'),
+        'neymar': ('A', 'Star Player'),
+
+        # === SPORTS: OTHER (Tier A) ===
+        'ufc': ('A', 'Combat Sports'),
+        'f1': ('A', 'Motorsports'),
+        'formula 1': ('A', 'Motorsports'),
+        'mcgregor': ('A', 'Star Fighter'),
+        'jon jones': ('A', 'Star Fighter'),
+        'verstappen': ('A', 'Star Driver'),
+        'hamilton': ('A', 'Star Driver'),
+
+        # === MUSIC & POP CULTURE (Tier S/A) ===
+        'taylor swift': ('S', 'Megastar'),
+        'swift': ('S', 'Megastar'),
+        'beyonce': ('S', 'Megastar'),
+        'drake': ('S', 'Megastar'),
+        'kendrick': ('S', 'Megastar'),
+        'k-dot': ('S', 'Megastar'),
+        'billie eilish': ('A', 'Pop Star'),
+        'the weeknd': ('A', 'Pop Star'),
+        'bad bunny': ('A', 'Global Star'),
+        'dua lipa': ('A', 'Pop Star'),
+        'harry styles': ('A', 'Pop Star'),
+        'adele': ('A', 'Pop Star'),
+        'lady gaga': ('A', 'Pop Star'),
+        'rihanna': ('A', 'Pop Star'),
+        'justin bieber': ('A', 'Pop Star'),
+        'travis scott': ('A', 'Rap Star'),
+        'kanye': ('A', 'Celeb'),
+        'ye': ('A', 'Celeb'),
+        'kim kardashian': ('A', 'Celeb'),
+        'oscar': ('S', 'Awards'),
+        'grammy': ('S', 'Awards'),
+        'emmy': ('A', 'Awards'),
+
+        # === GAMING (Tier S/A) ===
+        'gta': ('S', 'Major Game'),
+        'grand theft auto': ('S', 'Major Game'),
+        'call of duty': ('A', 'Major Game'),
+        'cod': ('A', 'Major Game'),
+        'fortnite': ('A', 'Major Game'),
+        'nintendo': ('A', 'Gaming'),
+        'playstation': ('A', 'Gaming'),
+        'xbox': ('A', 'Gaming'),
+
+        # === COUNTRIES / ECONOMY (Tier A/B) ===
+        # Focused on major economies/elections, avoiding war zones
+        'usa': ('A', 'Major Economy'),
+        'united states': ('A', 'Major Economy'),
+        'china': ('A', 'Major Economy'),
+        'uk': ('A', 'Major Economy'),
+        'united kingdom': ('A', 'Major Economy'),
+        'japan': ('A', 'Major Economy'),
+        'germany': ('B', 'Major Economy'),
+        'france': ('B', 'Major Economy'),
+        'canada': ('B', 'Major Economy'),
+        'india': ('B', 'Major Economy'),
+        'brazil': ('B', 'Major Economy'),
+        'fed rates': ('B', 'Economy'),
+        'interest rates': ('B', 'Economy'),
+        'cpi': ('B', 'Economy'),
+        'inflation': ('B', 'Economy'),
+        'bitcoin': ('A', 'Crypto'),
+        'ethereum': ('A', 'Crypto'),
+    }
+
+    IRRELEVANT_KEYWORDS = {
+        'weather', 'temperature', 'snowfall', 'rainfall',
+        'local', 'municipal', 'county', 'sheriff', 'mayor',
+        'subway', 'transit', 'bus', 'measure', 'prop',
+        'daily active users', 'friend.tech', 'manifold',
+        'war', 'invasion', 'casualty', 'deaths' # Explicitly ignore war specifics if needed
+    }
+
     def __init__(self):
         """Initialize the relevance checker"""
         api_key = os.getenv('OPENAI_API_KEY')
@@ -25,33 +163,6 @@ class RelevanceChecker:
             self.client = None
         else:
             self.client = OpenAI(api_key=api_key)
-        
-        # Known high-value topics (Tier S) - always relevant
-        self.tier_s_keywords = {
-            # Sports
-            'nfl', 'nba', 'mlb', 'nhl', 'lebron', 'mahomes', 'curry', 'world cup',
-            'super bowl', 'playoffs', 'championship', 'finals',
-            
-            # Entertainment
-            'taylor swift', 'drake', 'beyonce', 'marvel', 'star wars', 'disney',
-            'netflix', 'hbo', 'game of thrones',
-            
-            # Gaming
-            'gta 6', 'grand theft auto', 'call of duty', 'fortnite', 'minecraft',
-            'playstation', 'xbox', 'nintendo',
-            
-            # Awards
-            'oscars', 'grammys', 'emmys', 'academy award', 'golden globe',
-            
-            # Politics (for election markets)
-            'election', 'president', 'senate', 'congress'
-        }
-        
-        # Known low-value topics - never relevant
-        self.irrelevant_keywords = {
-            'weather', 'temperature', 'snowfall', 'cryptocurrency', 'bitcoin',
-            'local', 'county', 'municipal'
-        }
     
     def check_relevance(self, market_title: str) -> Dict:
         """
@@ -65,9 +176,7 @@ class RelevanceChecker:
                 'topic': str
             }
         """
-        # --- OPTIMIZATION START ---
         # 1. Check Database Cache
-        # (Ensure you import TopicCache from models at the top of the file)
         try:
             from models import TopicCache
             cached = TopicCache.get(market_title)
@@ -79,14 +188,11 @@ class RelevanceChecker:
                     'topic': self._extract_topic(market_title)
                 }
         except Exception as e:
-            # Log but don't crash if cache fails (e.g. table doesn't exist yet)
-            logger.warning(f"Cache lookup failed: {e}")
-        # --- OPTIMIZATION END ---
+            # Log but don't crash if cache fails
+            pass
         
-        # Extract main topic from title
+        # Extract topic for return value
         topic = self._extract_topic(market_title)
-        
-        # Quick check against known lists
         title_lower = market_title.lower()
         
         # Helper to cache results
@@ -94,39 +200,40 @@ class RelevanceChecker:
             try:
                 from models import TopicCache
                 TopicCache.set(market_title, result)
-            except Exception as e:
-                logger.warning(f"Failed to cache result: {e}")
+            except Exception:
+                pass
             return result
         
-        # Check Tier S keywords
-        for keyword in self.tier_s_keywords:
-            if keyword in title_lower:
-                return cache_and_return({
-                    'is_relevant': True,
-                    'tier': 'S',
-                    'reasoning': f'High-value topic: {keyword}',
-                    'topic': topic
-                })
-        
-        # Check irrelevant keywords
-        for keyword in self.irrelevant_keywords:
+        # 2. Check Irrelevant Keywords (Fast Fail)
+        for keyword in self.IRRELEVANT_KEYWORDS:
             if keyword in title_lower:
                 return cache_and_return({
                     'is_relevant': False,
                     'tier': 'C',
-                    'reasoning': f'Low-value topic: {keyword}',
+                    'reasoning': f'Rule match: {keyword}',
+                    'topic': topic
+                })
+
+        # 3. Check Static Relevant Rules (Fast Pass)
+        # We look for the keyword as a substring
+        for keyword, (tier, reason) in self.STATIC_RELEVANCE_RULES.items():
+            if keyword in title_lower:
+                return cache_and_return({
+                    'is_relevant': True,
+                    'tier': tier,
+                    'reasoning': f'Rule match: {reason} ({keyword})',
                     'topic': topic
                 })
         
-        # Use AI for everything else
+        # 4. Use AI for everything else (Expensive)
         if self.client:
             result = self._check_with_ai(market_title, topic)
             return cache_and_return(result)
         else:
-            # Fallback: moderate tier
+            # Fallback if no AI
             return {
                 'is_relevant': True,
-                'tier': 'A',
+                'tier': 'B',
                 'reasoning': 'AI check unavailable - default moderate relevance',
                 'topic': topic
             }
@@ -150,39 +257,29 @@ class RelevanceChecker:
 
 Market: "{market_title}"
 
-Context: This is for Vegas Insider and Action Network - sports/entertainment betting news sites that cover:
-- Major sports (NFL, NBA, MLB, etc.)
-- Entertainment (movies, music, TV, celebrities)
-- Gaming (major video game releases)
-- Pop culture events (awards shows, major releases)
+Context: This is for Vegas Insider and Action Network - sports/entertainment betting news sites.
 
 Determine:
 1. Is this topic relevant for these sites? (YES or NO)
 2. What tier is it?
-   - S = A-list topic with high search demand (LeBron, Taylor Swift, Oscars, GTA 6)
-   - A = Popular but not top-tier (B-list celebrities, indie games, rising stars)
-   - C = Niche or unknown (local events, obscure topics, low search potential)
+   - S = A-list topic (LeBron, Taylor Swift, Oscars, US Election)
+   - A = Popular but not top-tier (Star players, rising stars, major countries)
+   - C = Niche or unknown
 
 3. Brief reason (one sentence)
 
-Format your response EXACTLY as:
+Format:
 RELEVANT: YES/NO
 TIER: S/A/C
-REASON: [one sentence]"""
+REASON: [reason]"""
 
             response = self.client.chat.completions.create(
-                model="gpt-4o-mini",  # Fast and cheap model
+                model="gpt-4o-mini",
                 messages=[
-                    {
-                        "role": "system",
-                        "content": "You are a content strategist analyzing prediction market topics for sports and entertainment betting sites."
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
+                    {"role": "system", "content": "You are a content strategist."},
+                    {"role": "user", "content": prompt}
                 ],
-                max_tokens=150,
+                max_tokens=100,
                 temperature=0.3
             )
             
@@ -206,33 +303,9 @@ REASON: [one sentence]"""
             
         except Exception as e:
             logger.error(f"Error in AI relevance check: {e}")
-            # Fallback to moderate relevance on error
             return {
                 'is_relevant': True,
                 'tier': 'A',
-                'reasoning': 'AI check failed - defaulting to moderate relevance',
+                'reasoning': 'AI check failed - defaulting to moderate',
                 'topic': topic
             }
-
-
-# Example usage
-if __name__ == "__main__":
-    checker = RelevanceChecker()
-    
-    test_markets = [
-        "Will Taylor Swift win Grammy Album of the Year?",
-        "Will GTA 6 release in 2025?",
-        "NYC snowfall over 30 inches this winter?",
-        "Will LeBron James retire this season?",
-        "Bitcoin price above $150K by end of year?",
-    ]
-    
-    print("Testing Relevance Checker (OpenAI)")
-    print("=" * 60)
-    
-    for market in test_markets:
-        result = checker.check_relevance(market)
-        print(f"\nMarket: {market}")
-        print(f"  Relevant: {result['is_relevant']}")
-        print(f"  Tier: {result['tier']}")
-        print(f"  Reason: {result['reasoning']}")
