@@ -87,11 +87,25 @@ class ClusteringEngine:
     def __init__(self, similarity_threshold: float = 0.85):
         self.threshold = similarity_threshold
         # Determine strict parallelism limits to prevent freezing
+        # Adaptive worker count based on available memory
         try:
-            # Leave 1 core free for system/bot main thread
-            self.max_workers = max(1, multiprocessing.cpu_count() - 1)
-        except:
-            self.max_workers = 1
+            import psutil
+            available_ram_gb = psutil.virtual_memory().available / (1024**3)
+            cpu_count = multiprocessing.cpu_count()
+            
+            # Rule of thumb: 1 worker per 0.5GB available RAM, capped by CPUs
+            max_workers_by_ram = int(available_ram_gb / 0.5)
+            max_workers_by_cpu = min(16, max(1, cpu_count - 1))  # Cap at 16
+            
+            self.max_workers = min(max_workers_by_ram, max_workers_by_cpu)
+            
+            logger.info(f"Available RAM: {available_ram_gb:.1f}GB, CPUs: {cpu_count}")
+            logger.info(f"ClusteringEngine using {self.max_workers} workers")
+            
+        except ImportError:
+            # Fallback if psutil not available
+            self.max_workers = 8
+            logger.warning("psutil not available, defaulting to 8 workers")
 
     def cluster_markets(self, markets: List[Market]) -> List[MarketCluster]:
         """
