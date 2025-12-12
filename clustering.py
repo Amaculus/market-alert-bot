@@ -9,6 +9,7 @@ from typing import List, Dict, Optional
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 import logging
+
 from market import Market
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,7 @@ class ClusteringEngine:
     
     def _are_titles_similar(self, title1: str, title2: str) -> bool:
         """Check if two titles represent the same question"""
+        # Normalize
         t1 = self._normalize(title1)
         t2 = self._normalize(title2)
         
