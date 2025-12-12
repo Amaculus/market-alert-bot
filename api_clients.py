@@ -7,24 +7,19 @@ to our unified Market format for clustering.
 
 import requests
 import time
+import concurrent.futures
 from typing import List, Dict, Optional
 from datetime import datetime
 from market import Market
 
 
 class KalshiClient:
-    """Client for Kalshi API"""
+    """Client for Kalshi API (Kept serial due to cursor and strict rate limits)"""
     
     BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
     
     def __init__(self, email: Optional[str] = None, password: Optional[str] = None):
-        """
-        Initialize Kalshi client
-        
-        Args:
-            email: Kalshi account email (optional, for authenticated requests)
-            password: Kalshi account password (optional)
-        """
+        """Initialize Kalshi client"""
         self.session = requests.Session()
         self.token = None
         
@@ -33,29 +28,29 @@ class KalshiClient:
     
     def _login(self, email: str, password: str) -> None:
         """Authenticate with Kalshi API"""
-        response = self.session.post(
-            f"{self.BASE_URL}/login",
-            json={"email": email, "password": password}
-        )
-        response.raise_for_status()
-        self.token = response.json().get("token")
-        self.session.headers.update({"Authorization": f"Bearer {self.token}"})
+        try:
+            response = self.session.post(
+                f"{self.BASE_URL}/login",
+                json={"email": email, "password": password}
+            )
+            response.raise_for_status()
+            self.token = response.json().get("token")
+            self.session.headers.update({"Authorization": f"Bearer {self.token}"})
+        except Exception as e:
+            print(f"Kalshi Login Failed: {e}", flush=True)
     
     def get_all_markets(
         self, 
         status: str = "open",
         limit: int = 50000
     ) -> List[Market]:
-        """
-        Fetch all markets from Kalshi with rate limit handling
-        """
+        """Fetch all markets from Kalshi with rate limit handling (Serial)"""
         markets = []
         cursor = None
         
-        print(f"Fetching Kalshi markets (limit: {limit})...")
+        print(f"Fetching Kalshi markets (limit: {limit})...", flush=True)
         
         while True:
-            # API limit is 200 per page
             batch_size = 200
             remaining = limit - len(markets)
             
@@ -79,10 +74,9 @@ class KalshiClient:
                         params=params
                     )
                     
-                    # Handle Rate Limiting (429)
                     if response.status_code == 429:
-                        wait_time = 2 ** attempt  # 1s, 2s, 4s, 8s, 16s
-                        print(f"  Kalshi Rate Limit hit. Sleeping {wait_time}s...")
+                        wait_time = 2 ** attempt
+                        print(f"  Kalshi Rate Limit hit. Sleeping {wait_time}s...", flush=True)
                         time.sleep(wait_time)
                         continue
                     
@@ -92,16 +86,13 @@ class KalshiClient:
                     break
                     
                 except requests.exceptions.RequestException as e:
-                    print(f"  Error fetching Kalshi page: {e}")
-                    # If it's not a rate limit, we might want to skip or break
-                    # For now, let's break the retry loop and try to exit
+                    print(f"  Error fetching Kalshi page: {e}", flush=True)
                     break
             
             if not success:
-                print("  Failed to fetch page after retries. Stopping.")
+                print("  Failed to fetch Kalshi page after retries. Stopping.", flush=True)
                 break
 
-            # Process markets
             batch = data.get("markets", [])
             if not batch:
                 break
@@ -110,34 +101,31 @@ class KalshiClient:
                 market = self._parse_market(market_data)
                 markets.append(market)
             
-            # Check if there are more results
+            if len(markets) % 1000 == 0:
+                print(f"  Fetched {len(markets)} Kalshi markets so far...", flush=True)
+
             cursor = data.get("cursor")
             if not cursor:
                 break
                 
-            # Courtesy sleep between pages
             time.sleep(0.2)
         
-        print(f"Fetched {len(markets)} markets from Kalshi")
+        print(f"Fetched {len(markets)} markets from Kalshi", flush=True)
         return markets
     
     def _parse_market(self, data: Dict) -> Market:
-        """Convert Kalshi market data to our Market format"""
-        
-        # Parse event date
         event_date = None
         if data.get("expiration_time"):
-            event_date = datetime.fromisoformat(
-                data["expiration_time"].replace("Z", "+00:00")
-            )
+            try:
+                event_date = datetime.fromisoformat(data["expiration_time"].replace("Z", "+00:00"))
+            except: pass
         
-        # Calculate current odds
         current_odds = {}
         if data.get("yes_bid") is not None and data.get("no_bid") is not None:
             yes_price = (data.get("yes_bid", 0) + data.get("yes_ask", 0)) / 2
             no_price = (data.get("no_bid", 0) + data.get("no_ask", 0)) / 2
             current_odds = {
-                "yes": yes_price / 100,  # Convert cents to probability
+                "yes": yes_price / 100,
                 "no": no_price / 100
             }
         
@@ -156,127 +144,140 @@ class KalshiClient:
             status=data.get("status", "active"),
             raw_data=data
         )
-    
-    def get_markets_by_series(self, series_ticker: str) -> List[Market]:
-        """Get all markets in a specific series"""
-        response = self.session.get(
-            f"{self.BASE_URL}/markets",
-            params={"series_ticker": series_ticker}
-        )
-        response.raise_for_status()
-        data = response.json()
-        
-        return [self._parse_market(m) for m in data.get("markets", [])]
 
 
 class PolymarketClient:
-    """Client for Polymarket API"""
+    """Client for Polymarket API - Optimized for Parallel Page Fetching"""
     
-    BASE_URL = "https://clob.polymarket.com"
     GAMMA_URL = "https://gamma-api.polymarket.com"
+    PAGE_SIZE = 100
     
     def __init__(self):
-        """Initialize Polymarket client"""
         self.session = requests.Session()
-    
-    def get_all_markets(
-        self,
-        active: bool = True,
-        closed: bool = False,
-        limit: int = 50000
-    ) -> List[Market]:
-        """
-        Fetch all markets from Polymarket with pagination
-        """
-        markets = []
-        offset = 0
-        page_size = 100
+
+    def _fetch_page(self, offset: int, active: bool) -> List[Market]:
+        """Fetches a single page of markets from Polymarket"""
+        params = {
+            "limit": self.PAGE_SIZE,
+            "offset": offset,
+            "archived": "false" if active else "true"
+        }
         
-        print(f"Fetching Polymarket markets (limit: {limit})...")
-        
-        while len(markets) < limit:
-            params = {
-                "limit": page_size,
-                "offset": offset,
-                "archived": "false" if active else "true"
-            }
-            
+        # Simple retry mechanism for page fetching
+        for attempt in range(3):
             try:
-                response = self.session.get(
-                    f"{self.GAMMA_URL}/markets",
-                    params=params
-                )
+                response = self.session.get(f"{self.GAMMA_URL}/markets", params=params)
                 
-                # Simple rate limit check for Polymarket too
                 if response.status_code == 429:
-                    print("  Polymarket Rate Limit. Sleeping 2s...")
+                    # Rate limit hit: sleep and retry
                     time.sleep(2)
                     continue
                 
-                if response.status_code != 200:
-                    print(f"Error fetching Polymarket markets: {response.status_code}")
-                    break
-                
+                response.raise_for_status()
                 data = response.json()
                 
-                if not data:
-                    break
-                
+                markets = []
                 for market_data in data:
                     market = self._parse_market(market_data)
                     if market:
                         markets.append(market)
                 
-                if len(data) < page_size:
-                    break
+                # If we received less than PAGE_SIZE, it's the last page
+                return markets, len(data) < self.PAGE_SIZE 
                 
-                offset += page_size
-                
-                if len(markets) % 1000 == 0:
-                    print(f"  Fetched {len(markets)} so far...")
-                
-                # Courtesy sleep
-                time.sleep(0.1)
-                    
-            except Exception as e:
-                print(f"Error in Polymarket fetch loop: {e}")
-                break
+            except requests.exceptions.RequestException as e:
+                # Log error but don't stop the whole process
+                if attempt == 2:
+                    print(f"  Error fetching Polymarket page at offset {offset}: {e}", flush=True)
+                time.sleep(1)
+        return [], True # Treat failure as last page
+
+    def get_all_markets(
+        self,
+        active: bool = True,
+        limit: int = 50000
+    ) -> List[Market]:
+        """Fetch all markets from Polymarket using parallel pagination"""
         
-        print(f"Fetched {len(markets)} markets from Polymarket")
-        return markets
+        print(f"Fetching Polymarket markets (limit: {limit}) using parallel pages...", flush=True)
+        
+        all_markets = []
+        
+        # Since we don't know the total count, we start with 10 initial pages in parallel
+        # and dynamically add more as we go.
+        initial_pages = 20 
+        offsets_to_fetch = [i * self.PAGE_SIZE for i in range(initial_pages)]
+        
+        # Use a ThreadPool to manage parallel requests
+        # Max 10 concurrent fetches to be polite to the server
+        max_workers = 10 
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_offset = {executor.submit(self._fetch_page, offset, active): offset for offset in offsets_to_fetch}
+            
+            current_offset = initial_pages * self.PAGE_SIZE
+            last_page_found = False
+            
+            while future_to_offset and len(all_markets) < limit:
+                # Wait for the next completed future
+                done, _ = concurrent.futures.wait(future_to_offset, return_when=concurrent.futures.FIRST_COMPLETED)
+                
+                for future in done:
+                    offset = future_to_offset.pop(future)
+                    
+                    try:
+                        markets_batch, is_last_page = future.result()
+                        all_markets.extend(markets_batch)
+                        
+                        if len(all_markets) % 1000 < len(markets_batch):
+                            print(f"  Fetched {len(all_markets)} Polymarket markets so far...", flush=True)
+                        
+                        if is_last_page:
+                            last_page_found = True
+                        
+                        # Dynamic Scaling: If we haven't found the last page, submit the next page request
+                        if not last_page_found and len(all_markets) < limit:
+                            next_offset = current_offset
+                            current_offset += self.PAGE_SIZE
+                            
+                            next_future = executor.submit(self._fetch_page, next_offset, active)
+                            future_to_offset[next_future] = next_offset
+                            
+                    except Exception as e:
+                        print(f"  Polymarket parallel fetch error at offset {offset}: {e}", flush=True)
+                
+                if last_page_found and not future_to_offset:
+                    break
+
+        print(f"Fetched {len(all_markets)} markets from Polymarket", flush=True)
+        return all_markets
     
     def _parse_market(self, data: Dict) -> Optional[Market]:
-        """Convert Polymarket market data to our Market format"""
-        
         if not data.get("question"):
             return None
         
         event_date = None
         if data.get("end_date_iso"):
             try:
-                event_date = datetime.fromisoformat(
-                    data["end_date_iso"].replace("Z", "+00:00")
-                )
-            except:
-                pass
+                event_date = datetime.fromisoformat(data["end_date_iso"].replace("Z", "+00:00"))
+            except: pass
         
         current_odds = {}
-        if data.get("outcomes"):
-            outcomes = data["outcomes"]
-            if len(outcomes) == 2:
+        if data.get("outcomes") and len(data["outcomes"]) == 2:
+            try:
+                prices = data.get("outcomePrices", ["0.5", "0.5"])
                 current_odds = {
-                    "yes": float(data.get("outcomePrices", ["0.5", "0.5"])[0]),
-                    "no": float(data.get("outcomePrices", ["0.5", "0.5"])[1])
+                    "yes": float(prices[0]),
+                    "no": float(prices[1])
                 }
+            except: pass
         
         tags = data.get("tags", [])
-        
         volume = 0
         if data.get("volume"):
             try:
                 volume = float(data["volume"])
-            except:
-                pass
+            except: pass
         
         return Market(
             id=f"polymarket_{data.get('condition_id', data.get('id'))}",
@@ -293,29 +294,12 @@ class PolymarketClient:
             status="active" if data.get("active") else "closed",
             raw_data=data
         )
-    
-    def search_markets(self, query: str) -> List[Market]:
-        """Search for markets by keyword"""
-        response = self.session.get(
-            f"{self.GAMMA_URL}/markets",
-            params={"search": query}
-        )
-        
-        if response.status_code != 200:
-            return []
-        
-        data = response.json()
-        return [self._parse_market(m) for m in data if self._parse_market(m)]
 
 
 class MarketAggregator:
     """Aggregates markets from multiple platforms"""
     
-    def __init__(
-        self,
-        kalshi_email: Optional[str] = None,
-        kalshi_password: Optional[str] = None
-    ):
+    def __init__(self, kalshi_email: Optional[str] = None, kalshi_password: Optional[str] = None):
         self.kalshi = KalshiClient(kalshi_email, kalshi_password)
         self.polymarket = PolymarketClient()
     
@@ -326,27 +310,34 @@ class MarketAggregator:
         kalshi_status: str = "open",
         polymarket_active: bool = True
     ) -> List[Market]:
-        """Fetch markets from all enabled platforms"""
+        """Fetch markets from all enabled platforms IN PARALLEL"""
         all_markets = []
         
-        if include_kalshi:
-            try:
-                kalshi_markets = self.kalshi.get_all_markets(status=kalshi_status)
-                all_markets.extend(kalshi_markets)
-            except Exception as e:
-                print(f"Error fetching Kalshi markets: {e}")
+        # Use ThreadPoolExecutor to run platform fetches simultaneously
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            futures = {}
+            
+            if include_kalshi:
+                print("Starting Kalshi fetch...", flush=True)
+                future_k = executor.submit(self.kalshi.get_all_markets, status=kalshi_status)
+                futures[future_k] = "Kalshi"
+                
+            if include_polymarket:
+                print("Starting Polymarket fetch...", flush=True)
+                future_p = executor.submit(self.polymarket.get_all_markets, active=polymarket_active)
+                futures[future_p] = "Polymarket"
+            
+            # Wait for both to complete
+            for future in concurrent.futures.as_completed(futures):
+                platform_name = futures[future]
+                try:
+                    markets = future.result()
+                    all_markets.extend(markets)
+                    print(f"Finished fetching {platform_name}", flush=True)
+                except Exception as e:
+                    print(f"Error fetching {platform_name}: {e}", flush=True)
         
-        if include_polymarket:
-            try:
-                poly_markets = self.polymarket.get_all_markets(active=polymarket_active)
-                all_markets.extend(poly_markets)
-            except Exception as e:
-                print(f"Error fetching Polymarket markets: {e}")
-        
-        print(f"\nTotal markets fetched: {len(all_markets)}")
-        print(f"  Kalshi: {len([m for m in all_markets if m.platform == 'kalshi'])}")
-        print(f"  Polymarket: {len([m for m in all_markets if m.platform == 'polymarket'])}")
-        
+        print(f"\nTotal markets fetched: {len(all_markets)}", flush=True)
         return all_markets
 
 if __name__ == "__main__":
