@@ -300,3 +300,39 @@ def init_db():
 if __name__ == "__main__":
     init_db()
     print("Database tables created successfully")
+
+class TopicCache(Base):
+    """Caches AI relevance checks to save API costs"""
+    __tablename__ = 'topic_cache'
+    
+    topic_hash = Column(String(255), primary_key=True) # Use title as key
+    is_relevant = Column(Boolean)
+    tier = Column(String(10))
+    reasoning = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    @classmethod
+    def get(cls, title: str):
+        session = SessionLocal()
+        try:
+            return session.query(cls).filter(cls.topic_hash == title).first()
+        finally:
+            session.close()
+
+    @classmethod
+    def set(cls, title: str, data: dict):
+        session = SessionLocal()
+        try:
+            cache = cls(
+                topic_hash=title,
+                is_relevant=data['is_relevant'],
+                tier=data['tier'],
+                reasoning=data['reasoning']
+            )
+            session.merge(cache) # Update if exists
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            print(f"Cache error: {e}")
+        finally:
+            session.close()

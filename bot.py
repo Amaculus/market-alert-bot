@@ -166,67 +166,79 @@ class MarketMonitor:
         )
     
     def _evaluate_signals(self, market, snapshot, signals: Dict) -> HotMarket:
-        """Evaluate signals and determine if market warrants alert"""
-        
-        # Check topic relevance first
-        topic_info = self.relevance_checker.check_relevance(market.title)
-        
-        if not topic_info['is_relevant']:
-            return None
-        
-        min_volume = self._get_min_volume_for_tier(topic_info['tier'])
-        
-        # Must meet minimum volume threshold
-        if snapshot.volume < min_volume:
-            return None
-        
-        triggered_signals = []
-        tier = AlertTier.BACKGROUND
-        
-        # Tier 1: URGENT
-        # Massive volume spike (300%+ in 1h)
-        if signals.get('volume_spike_1h', 0) > 3.0:
-            triggered_signals.append('volume_spike_300_1h')
-            tier = AlertTier.URGENT
-        
-        # Dramatic odds swing (20%+ in 1h for top topics)
-        if topic_info['tier'] == 'S' and signals.get('odds_movement_1h', 0) > 0.20:
-            triggered_signals.append('odds_swing_20_1h')
-            tier = AlertTier.URGENT
-        
-        # Tier 2: DAILY
-        # Sustained volume growth (200%+ over 6h)
-        if signals.get('volume_spike_6h', 0) > 2.0 and tier != AlertTier.URGENT:
-            triggered_signals.append('sustained_volume_growth')
-            tier = AlertTier.DAILY
-        
-        # Event proximity (3-7 days)
-        if signals.get('event_proximity') and tier == AlertTier.BACKGROUND:
-            triggered_signals.append(f"event_in_{signals['event_proximity']}_days")
-            tier = AlertTier.DAILY
-        
-        # Significant odds movement (15%+ over 6h)
-        if signals.get('odds_movement_6h', 0) > 0.15 and tier == AlertTier.BACKGROUND:
-            triggered_signals.append('odds_movement_15_6h')
-            tier = AlertTier.DAILY
-        
-        if not triggered_signals:
-            return None
-        
-        # Create HotMarket object
-        return HotMarket(
-            market=market,
-            tier=tier,
-            signals=triggered_signals,
-            context={
-                'topic_tier': topic_info['tier'],
-                'topic_reasoning': topic_info['reasoning'],
-                'volume': snapshot.volume,
-                'odds': snapshot.yes_odds,
-                **signals
-            }
-        )
-    
+            """Evaluate signals and determine if market warrants alert"""
+            
+            # --- OPTIMIZATION START ---
+            # 1. Cheap Volume Filter: Check if market meets the absolute minimum volume 
+            # for ANY tier before doing expensive AI relevance checks.
+            lowest_threshold = min(
+                self.min_volume_tier_s, 
+                self.min_volume_tier_a, 
+                self.min_volume_tier_c
+            )
+            
+            if snapshot.volume < lowest_threshold:
+                return None
+            # --- OPTIMIZATION END ---
+
+            # Check topic relevance (now potentially cached)
+            topic_info = self.relevance_checker.check_relevance(market.title)
+            
+            if not topic_info['is_relevant']:
+                return None
+            
+            min_volume = self._get_min_volume_for_tier(topic_info['tier'])
+            
+            # Must meet minimum volume threshold for its specific tier
+            if snapshot.volume < min_volume:
+                return None
+            
+            triggered_signals = []
+            tier = AlertTier.BACKGROUND
+            
+            # Tier 1: URGENT
+            # Massive volume spike (300%+ in 1h)
+            if signals.get('volume_spike_1h', 0) > 3.0:
+                triggered_signals.append('volume_spike_300_1h')
+                tier = AlertTier.URGENT
+            
+            # Dramatic odds swing (20%+ in 1h for top topics)
+            if topic_info['tier'] == 'S' and signals.get('odds_movement_1h', 0) > 0.20:
+                triggered_signals.append('odds_swing_20_1h')
+                tier = AlertTier.URGENT
+            
+            # Tier 2: DAILY
+            # Sustained volume growth (200%+ over 6h)
+            if signals.get('volume_spike_6h', 0) > 2.0 and tier != AlertTier.URGENT:
+                triggered_signals.append('sustained_volume_growth')
+                tier = AlertTier.DAILY
+            
+            # Event proximity (3-7 days)
+            if signals.get('event_proximity') and tier == AlertTier.BACKGROUND:
+                triggered_signals.append(f"event_in_{signals['event_proximity']}_days")
+                tier = AlertTier.DAILY
+            
+            # Significant odds movement (15%+ over 6h)
+            if signals.get('odds_movement_6h', 0) > 0.15 and tier == AlertTier.BACKGROUND:
+                triggered_signals.append('odds_movement_15_6h')
+                tier = AlertTier.DAILY
+            
+            if not triggered_signals:
+                return None
+            
+            # Create HotMarket object
+            return HotMarket(
+                market=market,
+                tier=tier,
+                signals=triggered_signals,
+                context={
+                    'topic_tier': topic_info['tier'],
+                    'topic_reasoning': topic_info['reasoning'],
+                    'volume': snapshot.volume,
+                    'odds': snapshot.yes_odds,
+                    **signals
+                }
+            )    
     def _get_min_volume_for_tier(self, tier: str) -> float:
         """Get minimum volume threshold based on topic tier"""
         if tier == 'S':
