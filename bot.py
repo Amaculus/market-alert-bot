@@ -8,7 +8,7 @@ and sends alerts to Slack.
 import os
 import time
 import schedule
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict
 import logging
 
@@ -122,7 +122,7 @@ class MarketMonitor:
         
         # Event proximity
         if market.event_date:
-            days_until = (market.event_date - datetime.now()).days
+            days_until = (market.event_date - datetime.now(timezone.utc)).days
             if 3 <= days_until <= 7:
                 signals['event_proximity'] = days_until
         
