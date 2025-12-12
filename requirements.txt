@@ -1,0 +1,23 @@
+# Prediction Market Alert Bot Dependencies
+
+# Core framework
+schedule==1.2.0
+
+# Database
+sqlalchemy==2.0.23
+psycopg2-binary==2.9.9
+
+# API Clients
+requests==2.31.0
+openai==1.54.3
+
+# NLP (for clustering if needed)
+spacy==3.7.2
+python-slugify==8.0.1
+fuzzywuzzy==0.18.0
+python-Levenshtein==0.23.0
+
+# Utilities
+python-dotenv==1.0.0
+python-dateutil==2.8.2
+pytz==2023.3
