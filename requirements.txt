@@ -1,20 +1,17 @@
 # Prediction Market Alert Bot Dependencies
 
 # Core framework
-schedule==1.2.0
+schedule==1.2.2
 
 # Database
 sqlalchemy==2.0.36
-psycopg2-binary==2.9.9
+psycopg2-binary==2.9.10
 
 # API Clients
-requests==2.31.0
+requests==2.32.3
 openai==1.54.3
 
-# NLP (for clustering if needed)
-
-
 # Utilities
-python-dotenv==1.0.0
-python-dateutil==2.8.2
-pytz==2023.3
+python-dotenv==1.0.1
+python-dateutil==2.9.0.post0
+pytz==2024.2
