@@ -54,7 +54,7 @@ class MarketMonitor:
         self.min_volume_tier_c = float(os.getenv('MIN_VOLUME_TIER_C', '250000'))
         
         # ABSOLUTE FLOOR: Ignore anything below this before DB/Clustering
-        self.absolute_min_volume = 100000.0
+        self.absolute_min_volume = 10000.0
         
         logger.info(f"Monitor initialized with {self.check_interval_minutes}min check interval")
     
