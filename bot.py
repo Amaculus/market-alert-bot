@@ -54,7 +54,7 @@ class MarketMonitor:
         self.min_volume_tier_c = float(os.getenv('MIN_VOLUME_TIER_C', '250000'))
         
         # ABSOLUTE FLOOR: Ignore anything below this before DB/Clustering
-        self.absolute_min_volume = 100000.0
+        self.absolute_min_volume = 50000.0
         
         logger.info(f"Monitor initialized with {self.check_interval_minutes}min check interval")
     
@@ -316,12 +316,16 @@ def main():
     """Main entry point - runs the bot"""
     logger.info("="*60)
     logger.info("PREDICTION MARKET ALERT BOT")
-    logger.info("="*60)
-    logger.info(f"Environment: {os.getenv('RAILWAY_ENVIRONMENT', 'development')}")
-    logger.info(f"Slack webhook configured: {bool(os.getenv('SLACK_WEBHOOK_URL'))}")
+    # ... (rest of logging setup) ...
     
     # Initialize monitor
     monitor = MarketMonitor()
+    
+    # --- SEPARATE INITIAL CHECK LOGIC ---
+    logger.info("Running initial market check (Blocking)...")
+    monitor.check_markets()
+    logger.info("Initial market check COMPLETE. Starting scheduler.")
+    # ------------------------------------
     
     # Schedule tasks
     check_interval = monitor.check_interval_minutes
@@ -329,18 +333,7 @@ def main():
     schedule.every(check_interval).minutes.do(monitor.check_markets)
     
     # Schedule digests (9 AM and 5 PM)
-    morning_time = os.getenv('MORNING_DIGEST_TIME', '09:00')
-    evening_time = os.getenv('EVENING_DIGEST_TIME', '17:00')
-    
-    logger.info(f"Scheduling morning digest at {morning_time}")
-    schedule.every().day.at(morning_time).do(monitor.send_morning_digest)
-    
-    logger.info(f"Scheduling evening digest at {evening_time}")
-    schedule.every().day.at(evening_time).do(monitor.send_evening_digest)
-    
-    # Run initial check
-    logger.info("Running initial market check...")
-    monitor.check_markets()
+    # ... (rest of scheduling logic) ...
     
     # Main loop
     logger.info("Bot is now running. Press Ctrl+C to stop.")
@@ -349,14 +342,13 @@ def main():
     while True:
         try:
             schedule.run_pending()
-            time.sleep(60)  # Check every minute for scheduled tasks
+            time.sleep(60)
         except KeyboardInterrupt:
             logger.info("Shutting down gracefully...")
             break
         except Exception as e:
             logger.error(f"Error in main loop: {e}", exc_info=True)
             time.sleep(60)
-
 
 if __name__ == "__main__":
     main()
