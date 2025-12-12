@@ -54,7 +54,6 @@ class MarketMonitor:
         self.min_volume_tier_c = float(os.getenv('MIN_VOLUME_TIER_C', '250000'))
         
         # ABSOLUTE FLOOR: Ignore anything below this before DB/Clustering
-        # This prevents processing 90k dead markets
         self.absolute_min_volume = 1000.0
         
         logger.info(f"Monitor initialized with {self.check_interval_minutes}min check interval")
@@ -63,6 +62,9 @@ class MarketMonitor:
         """Main check routine - runs every 30 minutes"""
         try:
             logger.info("Starting market check...")
+            # --- DEBUG FORCE UPDATE ---
+            logger.info("--- DEBUG: RUNNING UPDATED BOT VERSION WITH CLUSTERING ---")
+            
             start_time = time.time()
             
             # 1. Fetch
