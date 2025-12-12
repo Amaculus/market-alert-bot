@@ -8,7 +8,7 @@ to our unified Market format for clustering.
 import requests
 from typing import List, Dict, Optional
 from datetime import datetime
-from clustering_engine import Market
+from market import Market
 
 
 class KalshiClient:
