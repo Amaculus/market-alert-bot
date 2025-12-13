@@ -15,9 +15,9 @@ logger = logging.getLogger(__name__)
 class RelevanceChecker:
     """Checks if market topics are relevant using Regex first, then AI"""
 
-    # === STATIC RULES - Expanded to catch more patterns ===
+    # === STATIC RULES - Expanded ===
     STATIC_RELEVANCE_RULES = {
-        # === POLITICS (Tier S) ===
+        # === POLITICS: US (Tier S) ===
         'trump': ('S', 'US Politics'),
         'donald trump': ('S', 'US Politics'),
         'vance': ('S', 'US Politics'),
@@ -44,6 +44,26 @@ class RelevanceChecker:
         'supreme court': ('S', 'Politics'),
         'scotus': ('S', 'Politics'),
 
+        # === POLITICS: World Leaders (Tier A/B) ===
+        'macron': ('A', 'World Politics'),
+        'xi jinping': ('A', 'World Politics'),
+        'putin': ('A', 'World Politics'),
+        'zelensky': ('A', 'World Politics'),
+        'netanyahu': ('A', 'World Politics'),
+        'trudeau': ('A', 'World Politics'),
+        'starmer': ('A', 'World Politics'),
+        'modi': ('A', 'World Politics'),
+        'pope': ('B', 'Religion'),
+        'pontiff': ('B', 'Religion'),
+        'vatican': ('B', 'Religion'),
+
+        # === CURRENT NEWS FIGURES ===
+        'daniel penny': ('A', 'Current Events'),
+        'luigi mangione': ('A', 'Current Events'),
+        'sam bankman': ('A', 'Current Events'),
+        'sbf': ('A', 'Current Events'),
+        'caroline ellison': ('B', 'Current Events'),
+
         # === SPORTS: NFL (Tier S/A) ===
         'nfl': ('S', 'League'),
         'super bowl': ('S', 'Major Event'),
@@ -54,20 +74,52 @@ class RelevanceChecker:
         'eagles': ('A', 'NFL Team'),
         'cowboys': ('A', 'NFL Team'),
         '49ers': ('A', 'NFL Team'),
+        'niners': ('A', 'NFL Team'),
         'ravens': ('A', 'NFL Team'),
         'bills': ('A', 'NFL Team'),
         'lions': ('A', 'NFL Team'),
+        'packers': ('A', 'NFL Team'),
+        'dolphins': ('A', 'NFL Team'),
+        'bengals': ('A', 'NFL Team'),
+        'steelers': ('A', 'NFL Team'),
+        'broncos': ('A', 'NFL Team'),
+        'raiders': ('A', 'NFL Team'),
+        'chargers': ('A', 'NFL Team'),
+        'jets': ('A', 'NFL Team'),
+        'giants': ('A', 'NFL Team'),
+        'patriots': ('A', 'NFL Team'),
+        'seahawks': ('A', 'NFL Team'),
+        'commanders': ('A', 'NFL Team'),
+        'bears': ('A', 'NFL Team'),
+        'vikings': ('A', 'NFL Team'),
+        'saints': ('A', 'NFL Team'),
+        'falcons': ('A', 'NFL Team'),
+        'buccaneers': ('A', 'NFL Team'),
+        'bucs': ('A', 'NFL Team'),
+        'panthers': ('A', 'NFL Team'),
+        'cardinals': ('A', 'NFL Team'),
+        'rams': ('A', 'NFL Team'),
+        'texans': ('A', 'NFL Team'),
+        'colts': ('A', 'NFL Team'),
+        'jaguars': ('A', 'NFL Team'),
+        'titans': ('A', 'NFL Team'),
+        'browns': ('A', 'NFL Team'),
         'mahomes': ('S', 'Star Player'),
         'kelce': ('S', 'Star Player'),
         'travis kelce': ('S', 'Star Player'),
         'lamar jackson': ('A', 'Star Player'),
         'josh allen': ('A', 'Star Player'),
         'burrow': ('A', 'Star Player'),
+        'joe burrow': ('A', 'Star Player'),
         'rodgers': ('A', 'Star Player'),
+        'aaron rodgers': ('A', 'Star Player'),
         'dak prescott': ('A', 'Star Player'),
         'cj stroud': ('A', 'Star Player'),
         'hurts': ('A', 'Star Player'),
+        'jalen hurts': ('A', 'Star Player'),
         'purdy': ('A', 'Star Player'),
+        'brock purdy': ('A', 'Star Player'),
+        'garrett wilson': ('A', 'Star Player'),
         'mvp': ('A', 'Award'),
 
         # === SPORTS: NBA (Tier S/A) ===
@@ -79,6 +131,20 @@ class RelevanceChecker:
         'warriors': ('A', 'NBA Team'),
         'heat': ('A', 'NBA Team'),
         'knicks': ('A', 'NBA Team'),
+        'nets': ('A', 'NBA Team'),
+        'bucks': ('A', 'NBA Team'),
+        'sixers': ('A', 'NBA Team'),
+        '76ers': ('A', 'NBA Team'),
+        'suns': ('A', 'NBA Team'),
+        'mavericks': ('A', 'NBA Team'),
+        'mavs': ('A', 'NBA Team'),
+        'nuggets': ('A', 'NBA Team'),
+        'clippers': ('A', 'NBA Team'),
+        'timberwolves': ('A', 'NBA Team'),
+        'grizzlies': ('A', 'NBA Team'),
+        'pelicans': ('A', 'NBA Team'),
+        'spurs': ('A', 'NBA Team'),
+        'thunder': ('A', 'NBA Team'),
         'lebron': ('S', 'Star Player'),
         'lebron james': ('S', 'Star Player'),
         'curry': ('S', 'Star Player'),
@@ -93,6 +159,7 @@ class RelevanceChecker:
         'luka': ('A', 'Star Player'),
         'doncic': ('A', 'Star Player'),
         'tatum': ('A', 'Star Player'),
+        'jayson tatum': ('A', 'Star Player'),
         'wembanyama': ('A', 'Star Player'),
         'wemby': ('A', 'Star Player'),
         'victor wembanyama': ('A', 'Star Player'),
@@ -104,6 +171,31 @@ class RelevanceChecker:
         'yankees': ('A', 'MLB Team'),
         'dodgers': ('S', 'MLB Team'),
         'mets': ('A', 'MLB Team'),
+        'red sox': ('A', 'MLB Team'),
+        'cubs': ('A', 'MLB Team'),
+        'white sox': ('A', 'MLB Team'),
+        'phillies': ('A', 'MLB Team'),
+        'braves': ('A', 'MLB Team'),
+        'astros': ('A', 'MLB Team'),
+        'padres': ('A', 'MLB Team'),
+        'mariners': ('A', 'MLB Team'),
+        'orioles': ('A', 'MLB Team'),
+        'twins': ('A', 'MLB Team'),
+        'guardians': ('A', 'MLB Team'),
+        'royals': ('A', 'MLB Team'),
+        'rangers': ('A', 'MLB Team'),
+        'blue jays': ('A', 'MLB Team'),
+        'rays': ('A', 'MLB Team'),
+        'marlins': ('B', 'MLB Team'),
+        'reds': ('B', 'MLB Team'),
+        'pirates': ('B', 'MLB Team'),
+        'rockies': ('B', 'MLB Team'),
+        'diamondbacks': ('B', 'MLB Team'),
+        'athletics': ('B', 'MLB Team'),
+        'nationals': ('B', 'MLB Team'),
+        'brewers': ('B', 'MLB Team'),
+        'tigers': ('B', 'MLB Team'),
+        'angels': ('B', 'MLB Team'),
         'ohtani': ('S', 'Global Star'),
         'shohei': ('S', 'Global Star'),
         'shohei ohtani': ('S', 'Global Star'),
@@ -118,37 +210,118 @@ class RelevanceChecker:
         'home run': ('A', 'MLB'),
         'cy young': ('A', 'Award'),
 
-        # === SPORTS: SOCCER (Tier A/S) ===
-        'soccer': ('A', 'Sport'),
-        'football': ('A', 'Sport'),  # Could be NFL or soccer
+        # === SPORTS: EPL/Soccer (Tier A) ===
+        'epl': ('A', 'League'),
         'premier league': ('A', 'League'),
         'champions league': ('A', 'Major Event'),
         'world cup': ('S', 'Global Event'),
         'la liga': ('A', 'League'),
         'serie a': ('A', 'League'),
         'bundesliga': ('A', 'League'),
+        'fa cup': ('A', 'Event'),
+        # EPL Teams
+        'manchester united': ('A', 'EPL Team'),
+        'man united': ('A', 'EPL Team'),
+        'man utd': ('A', 'EPL Team'),
+        'manchester city': ('A', 'EPL Team'),
+        'man city': ('A', 'EPL Team'),
+        'liverpool': ('A', 'EPL Team'),
+        'arsenal': ('A', 'EPL Team'),
+        'chelsea': ('A', 'EPL Team'),
+        'tottenham': ('A', 'EPL Team'),
+        'spurs': ('A', 'EPL Team'),
+        'newcastle': ('A', 'EPL Team'),
+        'aston villa': ('A', 'EPL Team'),
+        'west ham': ('A', 'EPL Team'),
+        'brighton': ('A', 'EPL Team'),
+        'brentford': ('B', 'EPL Team'),
+        'wolves': ('B', 'EPL Team'),
+        'wolverhampton': ('B', 'EPL Team'),
+        'crystal palace': ('B', 'EPL Team'),
+        'fulham': ('B', 'EPL Team'),
+        'everton': ('B', 'EPL Team'),
+        'nottingham': ('B', 'EPL Team'),
+        'bournemouth': ('B', 'EPL Team'),
+        'leicester': ('B', 'EPL Team'),
+        'ipswich': ('B', 'EPL Team'),
+        'southampton': ('B', 'EPL Team'),
+        # EPL Players
+        'salah': ('A', 'EPL Star'),
+        'mohamed salah': ('A', 'EPL Star'),
+        'haaland': ('A', 'Star Player'),
+        'erling': ('A', 'Star Player'),
+        'saka': ('A', 'EPL Star'),
+        'bukayo saka': ('A', 'EPL Star'),
+        'son': ('A', 'EPL Star'),
+        'heung-min son': ('A', 'EPL Star'),
+        'heung min son': ('A', 'EPL Star'),
+        'kane': ('A', 'Star Player'),
+        'harry kane': ('A', 'Star Player'),
+        'rashford': ('A', 'EPL Star'),
+        'bruno fernandes': ('A', 'EPL Star'),
+        'de bruyne': ('A', 'EPL Star'),
+        'foden': ('A', 'EPL Star'),
+        'phil foden': ('A', 'EPL Star'),
+        'palmer': ('A', 'EPL Star'),
+        'cole palmer': ('A', 'EPL Star'),
+        'jamie vardy': ('A', 'EPL Star'),
+        'vardy': ('A', 'EPL Star'),
+        'diogo jota': ('A', 'EPL Star'),
+        'jota': ('A', 'EPL Star'),
+        # Other soccer
         'messi': ('S', 'Global Star'),
         'lionel messi': ('S', 'Global Star'),
         'ronaldo': ('S', 'Global Star'),
         'cristiano': ('S', 'Global Star'),
         'mbappe': ('S', 'Star Player'),
         'kylian': ('S', 'Star Player'),
-        'haaland': ('A', 'Star Player'),
-        'erling': ('A', 'Star Player'),
         'bellingham': ('A', 'Star Player'),
         'jude bellingham': ('A', 'Star Player'),
         'yamal': ('A', 'Star Player'),
         'neymar': ('A', 'Star Player'),
-        'manchester': ('A', 'Soccer'),
-        'liverpool': ('A', 'Soccer'),
-        'arsenal': ('A', 'Soccer'),
-        'chelsea': ('A', 'Soccer'),
         'barcelona': ('A', 'Soccer'),
         'real madrid': ('A', 'Soccer'),
+        'psg': ('A', 'Soccer'),
+        'bayern': ('A', 'Soccer'),
+        'juventus': ('A', 'Soccer'),
+        'inter milan': ('A', 'Soccer'),
+        'ac milan': ('A', 'Soccer'),
+        'relegated': ('B', 'Soccer'),
+        'relegation': ('B', 'Soccer'),
+        'goalscorer': ('B', 'Soccer'),
 
-        # === SPORTS: OTHER (Tier A) ===
+        # === SPORTS: UFC/MMA (Tier A) ===
         'ufc': ('A', 'Combat Sports'),
         'mma': ('A', 'Combat Sports'),
+        'bellator': ('B', 'Combat Sports'),
+        'pfl': ('B', 'Combat Sports'),
+        # UFC Fighters
+        'mcgregor': ('A', 'Star Fighter'),
+        'conor mcgregor': ('A', 'Star Fighter'),
+        'jon jones': ('A', 'Star Fighter'),
+        'jones': ('B', 'Fighter'),
+        'adesanya': ('A', 'Star Fighter'),
+        'izzy': ('A', 'Star Fighter'),
+        'usman': ('A', 'Star Fighter'),
+        'khabib': ('A', 'Star Fighter'),
+        'holloway': ('A', 'Star Fighter'),
+        'max holloway': ('A', 'Star Fighter'),
+        'topuria': ('A', 'Star Fighter'),
+        'ilia topuria': ('A', 'Star Fighter'),
+        'volkanovski': ('A', 'Star Fighter'),
+        'volk': ('A', 'Star Fighter'),
+        'o\'malley': ('A', 'Star Fighter'),
+        'sean o\'malley': ('A', 'Star Fighter'),
+        'pereira': ('A', 'Star Fighter'),
+        'alex pereira': ('A', 'Star Fighter'),
+        'chimaev': ('A', 'Star Fighter'),
+        'khamzat': ('A', 'Star Fighter'),
+        'blanchfield': ('B', 'Fighter'),
+        'barber': ('B', 'Fighter'),
+        'ponzinibbio': ('B', 'Fighter'),
+        'machado garry': ('B', 'Fighter'),
+
+        # === SPORTS: Other ===
         'f1': ('A', 'Motorsports'),
         'formula 1': ('A', 'Motorsports'),
         'formula one': ('A', 'Motorsports'),
@@ -159,9 +332,8 @@ class RelevanceChecker:
         'tennis': ('A', 'Sport'),
         'wimbledon': ('A', 'Tennis'),
         'us open': ('A', 'Tennis/Golf'),
-        'mcgregor': ('A', 'Star Fighter'),
-        'conor mcgregor': ('A', 'Star Fighter'),
-        'jon jones': ('A', 'Star Fighter'),
+        'australian open': ('A', 'Tennis'),
+        'french open': ('A', 'Tennis'),
         'verstappen': ('A', 'Star Driver'),
         'max verstappen': ('A', 'Star Driver'),
         'hamilton': ('A', 'Star Driver'),
@@ -170,17 +342,39 @@ class RelevanceChecker:
         'djokovic': ('A', 'Tennis Star'),
         'nadal': ('A', 'Tennis Star'),
         'federer': ('A', 'Tennis Star'),
+        'sinner': ('A', 'Tennis Star'),
+        'jannik sinner': ('A', 'Tennis Star'),
+        'alcaraz': ('A', 'Tennis Star'),
+        'carlos alcaraz': ('A', 'Tennis Star'),
+
+        # === College Sports ===
+        'ncaa': ('A', 'College Sports'),
+        'march madness': ('S', 'College Event'),
+        'college football': ('A', 'College Sports'),
+        'cfp': ('A', 'College Football'),
+        'clemson': ('A', 'College Team'),
+        'alabama': ('A', 'College Team'),
+        'georgia': ('A', 'College Team'),
+        'ohio state': ('A', 'College Team'),
+        'michigan': ('A', 'College Team'),
+        'texas': ('A', 'College Team'),
+        'oregon': ('A', 'College Team'),
+        'notre dame': ('A', 'College Team'),
+        'lsu': ('A', 'College Team'),
+        'usc': ('A', 'College Team'),
+        'florida': ('A', 'College Team'),
+        'penn state': ('A', 'College Team'),
+        'tennessee': ('A', 'College Team'),
+        'oklahoma': ('A', 'College Team'),
 
         # === MUSIC & POP CULTURE (Tier S/A) ===
         'taylor swift': ('S', 'Megastar'),
         'swift': ('S', 'Megastar'),
-        'taylor': ('A', 'Possible Megastar'),  # Context dependent
         'beyonce': ('S', 'Megastar'),
         'beyoncé': ('S', 'Megastar'),
         'drake': ('S', 'Megastar'),
         'kendrick': ('S', 'Megastar'),
         'kendrick lamar': ('S', 'Megastar'),
-        'k-dot': ('S', 'Megastar'),
         'billie eilish': ('A', 'Pop Star'),
         'the weeknd': ('A', 'Pop Star'),
         'bad bunny': ('A', 'Global Star'),
@@ -211,30 +405,16 @@ class RelevanceChecker:
         'super bowl halftime': ('S', 'Event'),
         'coachella': ('A', 'Event'),
 
-        # === MOVIES/TV (Tier A) ===
-        'marvel': ('A', 'Entertainment'),
-        'disney': ('A', 'Entertainment'),
-        'netflix': ('A', 'Entertainment'),
-        'hbo': ('A', 'Entertainment'),
-        'star wars': ('A', 'Entertainment'),
-        'box office': ('A', 'Entertainment'),
-        'streaming': ('B', 'Entertainment'),
-
         # === GAMING (Tier S/A) ===
         'gta': ('S', 'Major Game'),
         'gta 6': ('S', 'Major Game'),
         'gta vi': ('S', 'Major Game'),
         'grand theft auto': ('S', 'Major Game'),
         'call of duty': ('A', 'Major Game'),
-        'cod': ('A', 'Major Game'),
         'fortnite': ('A', 'Major Game'),
-        'minecraft': ('A', 'Major Game'),
         'nintendo': ('A', 'Gaming'),
         'playstation': ('A', 'Gaming'),
         'xbox': ('A', 'Gaming'),
-        'switch': ('B', 'Gaming'),
-        'esports': ('B', 'Gaming'),
-        'twitch': ('B', 'Gaming'),
 
         # === TECH (Tier A/B) ===
         'apple': ('A', 'Tech'),
@@ -244,64 +424,51 @@ class RelevanceChecker:
         'tesla': ('A', 'Tech'),
         'openai': ('A', 'Tech'),
         'chatgpt': ('A', 'Tech'),
-        'ai': ('B', 'Tech'),
-        'artificial intelligence': ('B', 'Tech'),
         'spacex': ('A', 'Tech'),
         'twitter': ('A', 'Tech'),
-        'x.com': ('A', 'Tech'),
         'tiktok': ('A', 'Tech'),
 
-        # === ECONOMY (Tier A/B) ===
-        'fed': ('A', 'Economy'),
-        'federal reserve': ('A', 'Economy'),
-        'fed rates': ('B', 'Economy'),
+        # === ECONOMY (Tier B) ===
+        'fed': ('B', 'Economy'),
+        'federal reserve': ('B', 'Economy'),
         'interest rate': ('B', 'Economy'),
         'rate cut': ('B', 'Economy'),
-        'rate hike': ('B', 'Economy'),
-        'cpi': ('B', 'Economy'),
         'inflation': ('B', 'Economy'),
         'recession': ('B', 'Economy'),
-        'stock market': ('B', 'Economy'),
-        's&p': ('B', 'Economy'),
-        'dow jones': ('B', 'Economy'),
-        'nasdaq': ('B', 'Economy'),
 
         # === CRYPTO (Tier A/B) ===
         'bitcoin': ('A', 'Crypto'),
         'btc': ('A', 'Crypto'),
         'ethereum': ('A', 'Crypto'),
         'eth': ('A', 'Crypto'),
-        'crypto': ('B', 'Crypto'),
+        'dogecoin': ('A', 'Crypto'),
+        'doge': ('A', 'Crypto'),
         'solana': ('B', 'Crypto'),
-        'dogecoin': ('B', 'Crypto'),
-
-        # === COUNTRIES (Tier B) ===
-        'usa': ('B', 'Major Economy'),
-        'united states': ('B', 'Major Economy'),
-        'china': ('B', 'Major Economy'),
-        'russia': ('B', 'Geopolitics'),
-        'ukraine': ('B', 'Geopolitics'),
-        'israel': ('B', 'Geopolitics'),
-        'iran': ('B', 'Geopolitics'),
-        'uk': ('B', 'Major Economy'),
-        'united kingdom': ('B', 'Major Economy'),
-        'japan': ('B', 'Major Economy'),
-        'germany': ('B', 'Major Economy'),
-        'france': ('B', 'Major Economy'),
-        'canada': ('B', 'Major Economy'),
-        'india': ('B', 'Major Economy'),
-        'brazil': ('B', 'Major Economy'),
+        'xrp': ('B', 'Crypto'),
+        'crypto': ('B', 'Crypto'),
+        'coinbase': ('B', 'Crypto'),
+        'kraken': ('B', 'Crypto'),
     }
 
     IRRELEVANT_KEYWORDS = {
+        # Weather
         'weather', 'temperature', 'snowfall', 'rainfall', 'rain', 'snow',
         'humidity', 'celsius', 'fahrenheit',
+        # Local/Municipal
         'local', 'municipal', 'county', 'sheriff', 'mayor', 'city council',
-        'subway', 'transit', 'bus route', 'measure', 'prop',
+        'subway', 'transit', 'bus route',
+        # Prop bets / Measures
+        'measure', 'proposition',
+        # Meta/Platform
         'daily active users', 'friend.tech', 'manifold', 'metaculus',
         'polymarket volume', 'kalshi volume',
-        # Niche/obscure
-        'obscure', 'local election',
+        # Natural disasters (not sports/entertainment)
+        'earthquake', 'megaquake', 'tsunami', 'hurricane',
+        'volcano', 'eruption',
+        # Nuclear/War
+        'nuclear weapon', 'nuclear detonation',
+        # Meme/Obscure
+        'grimace coin', 'grimace vs',
     }
 
     def __init__(self):
@@ -312,7 +479,6 @@ class RelevanceChecker:
         else:
             self.client = OpenAI(api_key=api_key)
         
-        # Track AI calls for debugging
         self.ai_call_count = 0
     
     def check_relevance(self, market_title: str) -> Dict:
@@ -347,10 +513,10 @@ class RelevanceChecker:
                 result = {
                     'is_relevant': False,
                     'tier': 'C',
-                    'reasoning': f'[RULE:IRRELEVANT] matched: {keyword}',
+                    'reasoning': f'[RULE:SKIP] {keyword}',
                     'topic': topic
                 }
-                logger.debug(f"SKIP (irrelevant rule): {market_title[:60]}...")
+                logger.debug(f"SKIP: {market_title[:50]}...")
                 return cache_and_return(result)
 
         # 3. Check Static Relevant Rules (Fast Pass)
@@ -362,18 +528,16 @@ class RelevanceChecker:
                     'reasoning': f'[RULE] {reason} ({keyword})',
                     'topic': topic
                 }
-                logger.debug(f"MATCH (rule): {market_title[:60]}... -> Tier {tier}")
                 return cache_and_return(result)
         
         # 4. Use AI for everything else
         if self.client:
             self.ai_call_count += 1
-            logger.info(f"[AI CALL #{self.ai_call_count}] No rule match for: {market_title[:80]}...")
+            logger.info(f"[AI #{self.ai_call_count}] {market_title[:80]}...")
             result = self._check_with_ai(market_title, topic)
-            logger.info(f"[AI RESULT] relevant={result['is_relevant']}, tier={result['tier']}, reason={result['reasoning']}")
+            logger.info(f"[AI RESULT] rel={result['is_relevant']}, tier={result['tier']}")
             return cache_and_return(result)
         else:
-            # Fallback if no AI
             return {
                 'is_relevant': True,
                 'tier': 'B',
@@ -382,51 +546,36 @@ class RelevanceChecker:
             }
     
     def _extract_topic(self, title: str) -> str:
-        """Extract main topic/entity from market title"""
         title = re.sub(r'will\s+', '', title, flags=re.IGNORECASE)
         title = re.sub(r'\?', '', title)
-        title = re.sub(r'prediction|market|odds|betting', '', title, flags=re.IGNORECASE)
         words = title.strip().split()[:4]
         return ' '.join(words)
     
     def _check_with_ai(self, market_title: str, topic: str) -> Dict:
-        """Use OpenAI API to check relevance"""
-        
         try:
-            prompt = f"""Analyze this prediction market for content relevance:
+            prompt = f"""Is this prediction market relevant for sports/entertainment betting sites?
 
 Market: "{market_title}"
 
-Context: This is for sports/entertainment betting news sites like Vegas Insider and Action Network.
-
-Determine:
-1. Is this topic relevant? (YES or NO)
-2. Tier: S (A-list), A (popular), or C (niche)
-3. One sentence reason
-
-Format exactly:
-RELEVANT: YES/NO
-TIER: S/A/C
-REASON: [reason]"""
+Reply in exactly this format:
+RELEVANT: YES or NO
+TIER: S (A-list celebrity/major event), A (popular), or C (niche)
+REASON: one sentence"""
 
             response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "You are a content strategist. Respond in the exact format requested."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=80,
-                temperature=0.2
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=60,
+                temperature=0.1
             )
             
-            response_text = response.choices[0].message.content
+            text = response.choices[0].message.content
+            is_relevant = 'YES' in text.split('\n')[0].upper()
             
-            is_relevant = 'YES' in response_text.split('\n')[0].upper()
-            
-            tier_match = re.search(r'TIER:\s*([SAC])', response_text, re.IGNORECASE)
+            tier_match = re.search(r'TIER:\s*([SAC])', text, re.IGNORECASE)
             tier = tier_match.group(1).upper() if tier_match else 'B'
             
-            reason_match = re.search(r'REASON:\s*(.+)', response_text, re.IGNORECASE)
+            reason_match = re.search(r'REASON:\s*(.+)', text, re.IGNORECASE)
             reasoning = reason_match.group(1).strip() if reason_match else 'AI analysis'
             
             return {
@@ -437,10 +586,10 @@ REASON: [reason]"""
             }
             
         except Exception as e:
-            logger.error(f"AI relevance check error: {e}")
+            logger.error(f"AI error: {e}")
             return {
                 'is_relevant': True,
                 'tier': 'B',
-                'reasoning': '[AI ERROR] defaulting to moderate',
+                'reasoning': '[AI ERROR]',
                 'topic': topic
             }

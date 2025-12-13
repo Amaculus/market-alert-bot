@@ -76,6 +76,12 @@ class MarketMonitor:
             # 3. Cluster duplicates (now using fast hash-based method)
             clusters = self.clustering.cluster_markets(viable_markets)
             logger.info(f"STEP 2: Grouped into {len(clusters):,} unique topics")
+
+            # DEBUG: Show some cluster examples
+            for i, cluster in enumerate(clusters[:5]):
+                logger.info(f"  Cluster {i+1}: '{cluster.primary_market.title[:50]}...' + {len(cluster.related_markets)} related")
+                for related in cluster.related_markets[:3]:
+                    logger.info(f"    - {related.title[:60]}...")
             
             # 4. Analyze clusters
             hot_markets = []
