@@ -64,49 +64,24 @@ class MarketMonitor:
         """Main check routine - runs every 30 minutes"""
         try:
             logger.info("Starting market check...")
-            # --- DEBUG FORCE UPDATE ---
-            logger.info("--- DEBUG: RUNNING UPDATED BOT VERSION WITH CLUSTERING ---")
-            
             start_time = time.time()
             
             # 1. Fetch
             all_markets = self.aggregator.fetch_all_markets()
             
-            # 2. JUNK FILTER: Drop tiny markets immediately
-            viable_markets = [m for m in all_markets if m.volume > self.absolute_min_volume]
-            logger.info(f"STEP 1: Filtered {len(all_markets):,} -> {len(viable_markets):,} viable markets (>{self.absolute_min_volume} vol)")
+            # 2. Filter to high volume only
+            viable_markets = [m for m in all_markets if m.volume >= self.absolute_min_volume]
+            logger.info(f"Filtered to {len(viable_markets)} high-volume markets")
             
-            # 3. CLUSTER: Group duplicates
-            clusters = self.clustering.cluster_markets(viable_markets)
-            logger.info(f"STEP 2: Grouped into {len(clusters):,} unique topics")
-            
+            # 3. SKIP CLUSTERING - analyze markets directly
             hot_markets = []
-            markets_analyzed_count = 0
-            
-            # 4. ANALYZE CLUSTERS
-            for cluster in clusters:
-                # Use TOTAL cluster volume for the initial threshold check
-                if cluster.total_volume < self.min_volume_tier_s:
-                    continue
-
-                # Count this as an analysis attempt (potential API call)
-                markets_analyzed_count += 1
-
-                # We analyze the primary market, but temporarily inject total volume
-                market = cluster.primary_market
-                original_vol = market.volume
-                market.volume = cluster.total_volume 
-                
-                # Save/Analyze
+            for market in viable_markets:
                 snapshot = MarketSnapshot.create_from_market(market)
                 hot_market = self._analyze_market(market, snapshot)
-                
-                market.volume = original_vol # Reset
-                
                 if hot_market:
                     hot_markets.append(hot_market)
             
-            logger.info(f"STEP 3: Analyzed {markets_analyzed_count} high-volume clusters (Max potential AI calls)")
+            logger.info(f"Analyzed {len(viable_markets)} markets")
             
             # Send alerts
             if hot_markets:
@@ -120,7 +95,7 @@ class MarketMonitor:
             
         except Exception as e:
             logger.error(f"Error in market check: {e}", exc_info=True)
-    
+        
     def _analyze_market(self, market, current_snapshot) -> HotMarket:
         """Analyze if a market is hot based on various signals"""
         
