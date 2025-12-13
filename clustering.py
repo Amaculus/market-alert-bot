@@ -110,18 +110,12 @@ class ClusteringEngine:
     def cluster_markets(self, markets: List[Market]) -> List[MarketCluster]:
         """
         Group markets into clusters. 
-        Automatically switches to Parallel mode if N > 2000.
         """
         if not markets:
             return []
 
-        # Use Parallel Clustering for large datasets
-        if len(markets) > 2000 and self.max_workers > 1:
-            return self._cluster_parallel(markets)
-        
-        # Use Serial Clustering for small datasets (overhead isn't worth it)
+        # Always use serial - parallel causes memory issues in containers
         return self._cluster_serial(markets)
-
     def _cluster_serial(self, markets: List[Market]) -> List[MarketCluster]:
         """Standard serial clustering"""
         return _process_chunk(markets, self.threshold)
