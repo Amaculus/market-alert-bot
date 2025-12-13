@@ -59,7 +59,7 @@ class MarketMonitor:
         self.absolute_min_volume = 250000.0
         
         logger.info(f"Monitor initialized with {self.check_interval_minutes}min check interval")
-    
+        
     def check_markets(self) -> None:
         """Main check routine - runs every 30 minutes"""
         try:
@@ -69,21 +69,40 @@ class MarketMonitor:
             # 1. Fetch
             all_markets = self.aggregator.fetch_all_markets()
             
-            # 2. Filter to high volume only
+            # 2. Filter to high volume
             viable_markets = [m for m in all_markets if m.volume >= self.absolute_min_volume]
-            logger.info(f"Filtered to {len(viable_markets)} high-volume markets")
+            logger.info(f"STEP 1: Filtered {len(all_markets):,} -> {len(viable_markets):,} viable markets (>={self.absolute_min_volume} vol)")
             
-            # 3. SKIP CLUSTERING - analyze markets directly
+            # 3. Cluster duplicates (now using fast hash-based method)
+            clusters = self.clustering.cluster_markets(viable_markets)
+            logger.info(f"STEP 2: Grouped into {len(clusters):,} unique topics")
+            
+            # 4. Analyze clusters
             hot_markets = []
-            for market in viable_markets:
+            markets_analyzed = 0
+            
+            for cluster in clusters:
+                if cluster.total_volume < self.min_volume_tier_s:
+                    continue
+                
+                markets_analyzed += 1
+                market = cluster.primary_market
+                
+                # Temporarily use cluster's total volume
+                original_vol = market.volume
+                market.volume = cluster.total_volume
+                
                 snapshot = MarketSnapshot.create_from_market(market)
                 hot_market = self._analyze_market(market, snapshot)
+                
+                market.volume = original_vol
+                
                 if hot_market:
                     hot_markets.append(hot_market)
             
-            logger.info(f"Analyzed {len(viable_markets)} markets")
+            logger.info(f"STEP 3: Analyzed {markets_analyzed} high-volume clusters")
             
-            # Send alerts
+            # 5. Send alerts
             if hot_markets:
                 logger.info(f"Found {len(hot_markets)} hot markets")
                 self._process_alerts(hot_markets)
