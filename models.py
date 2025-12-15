@@ -211,18 +211,20 @@ class DigestQueue(Base):
     id = Column(Integer, primary_key=True)
     market_id = Column(String(255), nullable=False)
     market_title = Column(Text, nullable=False)
+    platform = Column(String(50))  # ADD THIS
     alert_tier = Column(String(50), nullable=False)
-    signals = Column(Text)  # JSON string
-    context = Column(Text)  # JSON string
+    signals = Column(Text)
+    context = Column(Text)
+    raw_data = Column(Text)  # ADD THIS - stores JSON of market raw_data
     
-    # Queue info
     queued_at = Column(DateTime, default=datetime.utcnow, index=True)
     included_in_digest = Column(Boolean, default=False)
     digest_sent_at = Column(DateTime)
     
     @classmethod
     def add_to_queue(cls, market_id: str, market_title: str, tier: str,
-                     signals: List[str], context: dict):
+                     signals: List[str], context: dict, platform: str = None, 
+                     raw_data: dict = None):
         """Add market to digest queue"""
         import json
         
@@ -239,14 +241,20 @@ class DigestQueue(Base):
                 existing.signals = json.dumps(signals)
                 existing.context = json.dumps(context)
                 existing.queued_at = datetime.utcnow()
+                if platform:
+                    existing.platform = platform
+                if raw_data:
+                    existing.raw_data = json.dumps(raw_data)
             else:
                 # Create new entry
                 item = cls(
                     market_id=market_id,
                     market_title=market_title,
+                    platform=platform,
                     alert_tier=tier,
                     signals=json.dumps(signals),
-                    context=json.dumps(context)
+                    context=json.dumps(context),
+                    raw_data=json.dumps(raw_data) if raw_data else None
                 )
                 session.add(item)
             
@@ -256,7 +264,21 @@ class DigestQueue(Base):
             raise e
         finally:
             session.close()
-    
+
+    @classmethod
+    def was_recently_sent(cls, market_id: str, hours: int = 24) -> bool:
+        """Check if this market was already in a recent digest"""
+        session = SessionLocal()
+        try:
+            cutoff = datetime.utcnow() - timedelta(hours=hours)
+            exists = session.query(cls)\
+                .filter(cls.market_id == market_id)\
+                .filter(cls.included_in_digest == True)\
+                .filter(cls.digest_sent_at >= cutoff)\
+                .first()
+            return exists is not None
+        finally:
+            session.close()
     @classmethod
     def get_queued_markets(cls, tier: str = None) -> List['DigestQueue']:
         """Get markets waiting in digest queue"""
