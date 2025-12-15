@@ -48,7 +48,10 @@ class AlertManager:
             if not platform or not raw_data:
                 return None
             
-            if platform == 'polymarket':
+            # Normalize platform string for reliable matching
+            platform_key = platform.lower().strip()
+            
+            if platform_key == 'polymarket':
                 slug = raw_data.get('slug')
                 if slug:
                     return f"https://polymarket.com/event/{slug}"
@@ -56,13 +59,14 @@ class AlertManager:
                 if cid:
                     return f"https://polymarket.com/event/{cid}"
             
-            elif platform == 'kalshi':
+            elif platform_key == 'kalshi':
                 ticker = raw_data.get('ticker', '')
                 if ticker:
                     return f"https://kalshi.com/markets/{ticker.lower()}"
             
             return None
-        except Exception:
+        except Exception as e:
+            logger.error(f"Error generating URL: {e}")
             return None
     
     def _get_market_details(self, market=None, platform: str = None, raw_data: dict = None) -> Dict:
@@ -85,9 +89,18 @@ class AlertManager:
         if not raw_data:
             return details
         
-        raw = raw_data
+        # Ensure raw_data is a dict
+        if isinstance(raw_data, str):
+            try:
+                raw = json.loads(raw_data)
+            except:
+                raw = {}
+        else:
+            raw = raw_data
+
+        platform_key = platform.lower() if platform else ''
         
-        if platform == 'polymarket':
+        if platform_key == 'polymarket':
             desc = raw.get('description', '')
             if desc and len(desc) > 10:
                 details['description'] = desc[:400] + ('...' if len(desc) > 400 else '')
@@ -110,7 +123,7 @@ class AlertManager:
             details['source'] = raw.get('resolutionSource')
             details['end_date'] = raw.get('end_date_iso')
             
-        elif platform == 'kalshi':
+        elif platform_key == 'kalshi':
             if raw.get('subtitle'):
                 details['description'] = raw['subtitle']
             
@@ -169,13 +182,6 @@ class AlertManager:
             return f"${volume/1_000:.0f}K"
         return f"${volume:.0f}"
     
-    def _format_number(self, num: float) -> str:
-        if num >= 1_000_000:
-            return f"{num/1_000_000:.1f}M"
-        elif num >= 1_000:
-            return f"{num/1_000:.0f}K"
-        return f"{num:.0f}"
-    
     # === ALERT SENDING ===
     
     def send_urgent_alerts(self, hot_markets: List[HotMarket]) -> None:
@@ -223,6 +229,14 @@ class AlertManager:
             logger.debug(f"Already in recent digest: {hm.market.id}")
             return
         
+        # Ensure raw_data is a dictionary before storing
+        raw = hm.market.raw_data
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except:
+                raw = {}
+
         DigestQueue.add_to_queue(
             market_id=hm.market.id,
             market_title=hm.market.title,
@@ -230,7 +244,7 @@ class AlertManager:
             signals=hm.signals,
             context=hm.context,
             platform=hm.market.platform,
-            raw_data=hm.market.raw_data
+            raw_data=raw 
         )
         logger.info(f"Queued: {hm.market.title[:50]}")
     
@@ -297,6 +311,8 @@ class AlertManager:
                 signal_lines.append(f"🆕 *New:* High-profile launch")
             elif 'event' in sig:
                 signal_lines.append(f"📅 *Event:* Coming soon")
+            elif 'high_value_market' in sig:
+                signal_lines.append(f"💎 *Top Pick:* High Interest")
         
         # Title with link
         title = f"<{market_url}|{market.title}>" if market_url else f"*{market.title}*"
@@ -408,7 +424,15 @@ class AlertManager:
         
         ctx = json.loads(item.context) if item.context else {}
         signals = json.loads(item.signals) if item.signals else []
-        raw = json.loads(item.raw_data) if item.raw_data else {}
+        
+        # Robust raw_data parsing
+        try:
+            if isinstance(item.raw_data, dict):
+                raw = item.raw_data
+            else:
+                raw = json.loads(item.raw_data) if item.raw_data else {}
+        except:
+            raw = {}
         
         # Generate URL
         url = self._get_market_url(platform=item.platform, raw_data=raw)
@@ -422,6 +446,9 @@ class AlertManager:
             title_text = f"<{url}|{title}>"
         else:
             title_text = f"*{title}*"
+            
+        # Add Platform Name explicitly
+        platform_name = f"[{item.platform.title()}]" if item.platform else ""
         
         # Build signal summary
         signal_parts = []
@@ -434,6 +461,8 @@ class AlertManager:
                 signal_parts.append("🎯 Odds")
             elif 'event' in sig:
                 signal_parts.append("📅 Soon")
+            elif 'high_value_market' in sig:
+                signal_parts.append("💎 Top Pick")
         
         volume = ctx.get('volume', 0)
         odds = ctx.get('odds')
@@ -451,7 +480,7 @@ class AlertManager:
             # Two-line format for urgent
             blocks.append({
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": f"• {title_text}\n   {info_line}"}
+                "text": {"type": "mrkdwn", "text": f"• {title_text} {platform_name}\n   {info_line}"}
             })
             
             # Add description if available
@@ -466,7 +495,7 @@ class AlertManager:
             # Single line for daily
             blocks.append({
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": f"• {title_text} — {info_line}"}
+                "text": {"type": "mrkdwn", "text": f"• {title_text} {platform_name} — {info_line}"}
             })
         
         return blocks
