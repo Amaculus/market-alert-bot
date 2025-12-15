@@ -5,6 +5,7 @@ Includes:
 1. Aggressive Noise Filtering (Blacklist)
 2. Content Prioritization (Whitelist)
 3. Parallel Processing with Rate Limiting (ThreadPool)
+4. Backward Compatibility for single-item checks
 """
 
 import os
@@ -26,23 +27,23 @@ class RelevanceChecker:
     
     # === 1. BLACKLIST (Immediate Fail) ===
     BLACKLIST_KEYWORDS = [
-        # Weather & Science (High noise on prediction markets)
+        # Weather & Science
         r'temperature', r'degrees?', r'fahrenheit', r'celsius', 
         r'rain(fall)?', r'snow(fall)?', r'precipitation', r'weather',
         r'heat index', r'wind speed', r'NOAA', r'NASA', r'hurricane',
         
-        # Niche Finance (Irrelevant for sports/pop-culture)
+        # Niche Finance
         r'closing price', r'market cap', r'fed funds', r'treasury', 
         r'mortgage rate', r'gas price', r'brent crude', r'WTI',
         r'eur/usd', r'yen', r'forex', r'commodity', 
         r'jobless claims', r'cpi', r'ppi', r'inflation',
         
-        # Spam / Recurring / Low Value
+        # Spam / Low Value
         r'TSA check(point)?s?', r'covid', r'pandemic', 
         r'spotify', r'billboard', r'metacritic', r'rotten tomatoes',
         r'box office',
         
-        # Local/Bureaucratic Politics
+        # Local Politics
         r'mayor of', r'city council', r'comptroller', r'local election',
         r'transit', r'subway', r'approval rating'
     ]
@@ -98,11 +99,30 @@ class RelevanceChecker:
         self._minute_start = time.time()
         self._request_count = 0
 
+    def check_relevance(self, market_title: str) -> Dict[str, Any]:
+        """
+        Single-item check. Required by your existing bot.py.
+        """
+        # 1. Fast Checks
+        static_result = self._check_static_rules(market_title)
+        if static_result:
+            return static_result
+
+        # 2. AI Check (Throttled)
+        if self.client:
+            return self._check_with_ai_throttled(market_title)
+            
+        # 3. Fallback
+        return {
+            'is_relevant': False,
+            'tier': 'C',
+            'reasoning': 'No AI Client',
+            'topic': self._extract_topic(market_title)
+        }
+
     def check_relevance_batch(self, titles: List[str]) -> Dict[str, Dict[str, Any]]:
         """
         Process a batch of titles in parallel.
-        1. Checks Cache/Blacklist/Whitelist (Fast, Main Thread)
-        2. Sends remaining to OpenAI (Parallel, Rate Limited)
         """
         results = {}
         to_process_ai = []
@@ -120,7 +140,6 @@ class RelevanceChecker:
             logger.info(f"Checking {len(to_process_ai)} markets with AI (Parallel)...")
             
             with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as executor:
-                # Map future to title
                 future_to_title = {
                     executor.submit(self._check_with_ai_throttled, title): title 
                     for title in to_process_ai
@@ -132,7 +151,6 @@ class RelevanceChecker:
                         results[title] = future.result()
                     except Exception as e:
                         logger.error(f"Error processing '{title}': {e}")
-                        # Fallback if AI crashes
                         results[title] = {
                             'is_relevant': False, 
                             'tier': 'C', 
@@ -203,12 +221,10 @@ class RelevanceChecker:
         """Thread-safe rate limiter."""
         with self._rate_lock:
             now = time.time()
-            # Reset counter if a minute has passed
             if now - self._minute_start >= 60:
                 self._minute_start = now
                 self._request_count = 0
             
-            # Sleep if limit reached
             if self._request_count >= self.MAX_RPM:
                 sleep_time = 60 - (now - self._minute_start) + 1
                 logger.info(f"Rate limit hit ({self.MAX_RPM}/min). Sleeping {sleep_time:.1f}s...")
@@ -261,7 +277,7 @@ REASON: Brief phrase"""
         except Exception as e:
             logger.error(f"AI Call Failed: {e}")
             return {
-                'is_relevant': True, # Fail open (safe)
+                'is_relevant': True, # Fail open
                 'tier': 'B',
                 'reasoning': '[AI ERROR]',
                 'topic': topic
