@@ -1,11 +1,12 @@
 """
-Market Clustering Engine - Conservative Hash-Based
+Market Clustering Engine - Conservative Hash-Based with Parallel Support
 """
 
 import re
 import logging
-from typing import List, Dict, Set, Tuple
+from typing import List, Dict, Set
 from dataclasses import dataclass, field
+from concurrent.futures import ThreadPoolExecutor
 
 from market import Market
 
@@ -35,7 +36,7 @@ class MarketCluster:
 
 
 class ClusteringEngine:
-    """Conservative hash-based clustering - only groups very similar markets"""
+    """Conservative hash-based clustering with parallel support"""
     
     # Words to completely ignore when generating keys
     STOP_WORDS = {
@@ -82,7 +83,8 @@ class ClusteringEngine:
     YEAR_PATTERN = re.compile(r'\b20\d{2}\b')
     
     def __init__(self):
-        pass
+        # With 8GB RAM, we can use parallel processing
+        self.max_workers = 4
     
     def cluster_markets(self, markets: List[Market]) -> List[MarketCluster]:
         """Group markets by specific entity/event matching"""
@@ -90,30 +92,33 @@ class ClusteringEngine:
         if not markets:
             return []
         
-        logger.info(f"Clustering {len(markets)} markets using conservative hash method...")
+        logger.info(f"Clustering {len(markets)} markets...")
         
         # Sort by volume descending
         sorted_markets = sorted(markets, key=lambda x: x.volume, reverse=True)
         
-        # Hash map: key -> cluster
+        # For large datasets, use parallel key generation
+        if len(sorted_markets) > 5000 and self.max_workers > 1:
+            return self._cluster_parallel(sorted_markets)
+        
+        return self._cluster_serial(sorted_markets)
+    
+    def _cluster_serial(self, sorted_markets: List[Market]) -> List[MarketCluster]:
+        """Serial clustering for smaller datasets"""
         clusters: Dict[str, MarketCluster] = {}
-        # Track which markets are already clustered
         clustered_market_ids: Set[str] = set()
         
         for market in sorted_markets:
             if market.id in clustered_market_ids:
                 continue
-                
-            # Generate specific keys for this market
+            
             keys = self._generate_keys(market.title)
             
             if not keys:
-                # No good keys - create standalone cluster
                 clusters[f"standalone_{market.id}"] = MarketCluster(primary_market=market)
                 clustered_market_ids.add(market.id)
                 continue
             
-            # Check if any key matches existing cluster
             matched_cluster = None
             for key in keys:
                 if key in clusters:
@@ -121,33 +126,82 @@ class ClusteringEngine:
                     break
             
             if matched_cluster:
-                # Only add if genuinely similar (extra validation)
                 if self._are_truly_related(market.title, matched_cluster.primary_market.title):
                     matched_cluster.related_markets.append(market)
                     clustered_market_ids.add(market.id)
-                    # Register additional keys
                     for key in keys:
                         if key not in clusters:
                             clusters[key] = matched_cluster
                 else:
-                    # False positive - create new cluster
                     new_cluster = MarketCluster(primary_market=market)
                     for key in keys:
                         if key not in clusters:
                             clusters[key] = new_cluster
                     clustered_market_ids.add(market.id)
             else:
-                # Create new cluster
                 new_cluster = MarketCluster(primary_market=market)
                 for key in keys:
                     clusters[key] = new_cluster
                 clustered_market_ids.add(market.id)
         
-        # Deduplicate
         unique_clusters = list({id(c): c for c in clusters.values()}.values())
+        logger.info(f"Clustered into {len(unique_clusters)} unique topics (serial)")
+        return unique_clusters
+    
+    def _cluster_parallel(self, sorted_markets: List[Market]) -> List[MarketCluster]:
+        """Parallel key generation, then serial clustering"""
         
-        logger.info(f"Clustered into {len(unique_clusters)} unique topics")
+        logger.info(f"Using parallel key generation with {self.max_workers} workers...")
         
+        # Parallel: Generate keys for all markets
+        def generate_keys_for_market(market):
+            return (market, self._generate_keys(market.title))
+        
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            results = list(executor.map(generate_keys_for_market, sorted_markets))
+        
+        logger.info(f"Key generation complete, building clusters...")
+        
+        # Serial: Build clusters (must be serial due to shared state)
+        clusters: Dict[str, MarketCluster] = {}
+        clustered_market_ids: Set[str] = set()
+        
+        for market, keys in results:
+            if market.id in clustered_market_ids:
+                continue
+            
+            if not keys:
+                clusters[f"standalone_{market.id}"] = MarketCluster(primary_market=market)
+                clustered_market_ids.add(market.id)
+                continue
+            
+            matched_cluster = None
+            for key in keys:
+                if key in clusters:
+                    matched_cluster = clusters[key]
+                    break
+            
+            if matched_cluster:
+                if self._are_truly_related(market.title, matched_cluster.primary_market.title):
+                    matched_cluster.related_markets.append(market)
+                    clustered_market_ids.add(market.id)
+                    for key in keys:
+                        if key not in clusters:
+                            clusters[key] = matched_cluster
+                else:
+                    new_cluster = MarketCluster(primary_market=market)
+                    for key in keys:
+                        if key not in clusters:
+                            clusters[key] = new_cluster
+                    clustered_market_ids.add(market.id)
+            else:
+                new_cluster = MarketCluster(primary_market=market)
+                for key in keys:
+                    clusters[key] = new_cluster
+                clustered_market_ids.add(market.id)
+        
+        unique_clusters = list({id(c): c for c in clusters.values()}.values())
+        logger.info(f"Clustered into {len(unique_clusters)} unique topics (parallel)")
         return unique_clusters
     
     def _generate_keys(self, title: str) -> List[str]:
@@ -191,7 +245,7 @@ class ClusteringEngine:
                 keys.append('_'.join(specific_words[:3]))
         
         # Key 3: Look for team vs team pattern (e.g., "Lakers vs Celtics")
-        vs_match = re.search(r'(\w+)\s+(?:vs\.?|versus|v\.?)\s+(\w+)', title, re.IGNORECASE)
+        vs_match = re.search(r'(\w+)\s+(?:vs\.?|versus|v\.?|@)\s+(\w+)', title, re.IGNORECASE)
         if vs_match:
             team1 = vs_match.group(1).lower()
             team2 = vs_match.group(2).lower()
