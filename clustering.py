@@ -84,7 +84,7 @@ class ClusteringEngine:
     
     def __init__(self):
         # With 8GB RAM, we can use parallel processing
-        self.max_workers = 4
+        self.max_workers = 16
     
     def cluster_markets(self, markets: List[Market]) -> List[MarketCluster]:
         """Group markets by specific entity/event matching"""
