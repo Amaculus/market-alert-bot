@@ -14,12 +14,11 @@ from market import Market
 
 
 class KalshiClient:
-    """Client for Kalshi API (Kept serial due to cursor and strict rate limits)"""
+    """Client for Kalshi API"""
     
     BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
     
     def __init__(self, email: Optional[str] = None, password: Optional[str] = None):
-        """Initialize Kalshi client"""
         self.session = requests.Session()
         self.token = None
         
@@ -27,7 +26,6 @@ class KalshiClient:
             self._login(email, password)
     
     def _login(self, email: str, password: str) -> None:
-        """Authenticate with Kalshi API"""
         try:
             response = self.session.post(
                 f"{self.BASE_URL}/login",
@@ -44,7 +42,7 @@ class KalshiClient:
         status: str = "open",
         limit: int = 50000
     ) -> List[Market]:
-        """Fetch all markets from Kalshi with rate limit handling (Serial)"""
+        """Fetch all markets from Kalshi"""
         markets = []
         cursor = None
         
@@ -65,7 +63,6 @@ class KalshiClient:
             if cursor:
                 params["cursor"] = cursor
             
-            # Retry loop for 429 Rate Limits
             success = False
             for attempt in range(5):
                 try:
@@ -129,14 +126,23 @@ class KalshiClient:
                 "no": no_price / 100
             }
         
+        # Extract event_id from series_ticker
+        series_ticker = data.get("series_ticker")
+        event_id = f"kalshi_{series_ticker}" if series_ticker else f"kalshi_{data['ticker']}"
+        
+        # Try to get event title from the series title or event title field
+        event_title = data.get("event_title") or data.get("series_title")
+        
         return Market(
             id=f"kalshi_{data['ticker']}",
             platform="kalshi",
             market_id=data["ticker"],
             title=data.get("title", ""),
+            event_id=event_id,
+            event_title=event_title,
             subtitle=data.get("subtitle"),
             category=data.get("category"),
-            series_ticker=data.get("series_ticker"),
+            series_ticker=series_ticker,
             tags=[],
             current_odds=current_odds,
             volume=data.get("volume", 0),
@@ -147,7 +153,7 @@ class KalshiClient:
 
 
 class PolymarketClient:
-    """Client for Polymarket API - Optimized for Parallel Page Fetching"""
+    """Client for Polymarket API"""
     
     GAMMA_URL = "https://gamma-api.polymarket.com"
     PAGE_SIZE = 100
@@ -163,13 +169,11 @@ class PolymarketClient:
             "archived": "false" if active else "true"
         }
         
-        # Simple retry mechanism for page fetching
         for attempt in range(3):
             try:
                 response = self.session.get(f"{self.GAMMA_URL}/markets", params=params)
                 
                 if response.status_code == 429:
-                    # Rate limit hit: sleep and retry
                     time.sleep(2)
                     continue
                 
@@ -182,15 +186,13 @@ class PolymarketClient:
                     if market:
                         markets.append(market)
                 
-                # If we received less than PAGE_SIZE, it's the last page
                 return markets, len(data) < self.PAGE_SIZE 
                 
             except requests.exceptions.RequestException as e:
-                # Log error but don't stop the whole process
                 if attempt == 2:
                     print(f"  Error fetching Polymarket page at offset {offset}: {e}", flush=True)
                 time.sleep(1)
-        return [], True # Treat failure as last page
+        return [], True
 
     def get_all_markets(
         self,
@@ -202,14 +204,8 @@ class PolymarketClient:
         print(f"Fetching Polymarket markets (limit: {limit}) using parallel pages...", flush=True)
         
         all_markets = []
-        
-        # Since we don't know the total count, we start with 10 initial pages in parallel
-        # and dynamically add more as we go.
         initial_pages = 20 
         offsets_to_fetch = [i * self.PAGE_SIZE for i in range(initial_pages)]
-        
-        # Use a ThreadPool to manage parallel requests
-        # Max 10 concurrent fetches to be polite to the server
         max_workers = 10 
         
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -219,7 +215,6 @@ class PolymarketClient:
             last_page_found = False
             
             while future_to_offset and len(all_markets) < limit:
-                # Wait for the next completed future
                 done, _ = concurrent.futures.wait(future_to_offset, return_when=concurrent.futures.FIRST_COMPLETED)
                 
                 for future in done:
@@ -235,7 +230,6 @@ class PolymarketClient:
                         if is_last_page:
                             last_page_found = True
                         
-                        # Dynamic Scaling: If we haven't found the last page, submit the next page request
                         if not last_page_found and len(all_markets) < limit:
                             next_offset = current_offset
                             current_offset += self.PAGE_SIZE
@@ -279,11 +273,28 @@ class PolymarketClient:
                 volume = float(data["volume"])
             except: pass
         
+        # Extract event_id - try multiple fields
+        # Polymarket uses: groupId, eventId, or slug for grouping
+        group_id = (
+            data.get("groupId") or 
+            data.get("group_id") or 
+            data.get("eventId") or 
+            data.get("event_id") or
+            data.get("slug") or
+            data.get("condition_id", data.get("id"))
+        )
+        event_id = f"polymarket_{group_id}"
+        
+        # Get event title if available
+        event_title = data.get("groupTitle") or data.get("eventTitle") or data.get("group_title")
+        
         return Market(
             id=f"polymarket_{data.get('condition_id', data.get('id'))}",
             platform="polymarket",
             market_id=data.get("condition_id", data.get("id")),
             title=data.get("question", ""),
+            event_id=event_id,
+            event_title=event_title,
             subtitle=data.get("description"),
             category=tags[0] if tags else None,
             series_ticker=None,
@@ -313,7 +324,6 @@ class MarketAggregator:
         """Fetch markets from all enabled platforms IN PARALLEL"""
         all_markets = []
         
-        # Use ThreadPoolExecutor to run platform fetches simultaneously
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             futures = {}
             
@@ -327,7 +337,6 @@ class MarketAggregator:
                 future_p = executor.submit(self.polymarket.get_all_markets, active=polymarket_active)
                 futures[future_p] = "Polymarket"
             
-            # Wait for both to complete
             for future in concurrent.futures.as_completed(futures):
                 platform_name = futures[future]
                 try:
@@ -339,6 +348,7 @@ class MarketAggregator:
         
         print(f"\nTotal markets fetched: {len(all_markets)}", flush=True)
         return all_markets
+
 
 if __name__ == "__main__":
     aggregator = MarketAggregator()
