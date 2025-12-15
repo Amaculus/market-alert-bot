@@ -11,7 +11,7 @@ import schedule
 from datetime import datetime, timezone
 from typing import List, Dict
 import logging
-import threading  # ADDED: For non-blocking initial check
+import threading
 
 from models import init_db, MarketSnapshot
 from api_clients import MarketAggregator
@@ -46,6 +46,9 @@ class MarketMonitor:
         self.relevance_checker = RelevanceChecker()
         self.clustering = ClusteringEngine()
         
+        # Thread safety lock
+        self.run_lock = threading.Lock() # <--- ADDED THIS
+        
         # Config
         self.check_interval_minutes = int(os.getenv('CHECK_INTERVAL_MINUTES', '30'))
         
@@ -55,13 +58,18 @@ class MarketMonitor:
         self.min_volume_tier_c = float(os.getenv('MIN_VOLUME_TIER_C', '250000'))
         
         # ABSOLUTE FLOOR: Ignore anything below this before DB/Clustering
-        # Using 50000.0 to allow Tier S markets to proceed.
-        self.absolute_min_volume = 10000.0
+        self.absolute_min_volume = 100000
         
         logger.info(f"Monitor initialized with {self.check_interval_minutes}min check interval")
         
     def check_markets(self) -> None:
         """Main check routine - runs every 30 minutes"""
+        
+        # Attempt to acquire lock. If failed, it means a check is already running.
+        if not self.run_lock.acquire(blocking=False):
+            logger.warning("⚠️ SKIPPING CHECK: Previous market check is still running!")
+            return
+
         try:
             logger.info("Starting market check...")
             start_time = time.time()
@@ -73,7 +81,7 @@ class MarketMonitor:
             viable_markets = [m for m in all_markets if m.volume >= self.absolute_min_volume]
             logger.info(f"STEP 1: Filtered {len(all_markets):,} -> {len(viable_markets):,} viable markets (>={self.absolute_min_volume} vol)")
             
-            # 3. Cluster duplicates (now using fast hash-based method)
+            # 3. Cluster duplicates
             clusters = self.clustering.cluster_markets(viable_markets)
             logger.info(f"STEP 2: Grouped into {len(clusters):,} unique topics")
 
@@ -120,6 +128,10 @@ class MarketMonitor:
             
         except Exception as e:
             logger.error(f"Error in market check: {e}", exc_info=True)
+            
+        finally:
+            # ALWAYS release the lock, even if there was an error
+            self.run_lock.release()
         
     def _analyze_market(self, market, current_snapshot) -> HotMarket:
         """Analyze if a market is hot based on various signals"""
@@ -157,10 +169,20 @@ class MarketMonitor:
         
         # Event proximity
         if market.event_date:
-            # FIX: Ensure datetime.now() is timezone aware to prevent TypeError
-            days_until = (market.event_date - datetime.now(timezone.utc)).days
-            if 3 <= days_until <= 7:
-                signals['event_proximity'] = days_until
+            try:
+                # Ensure we compare timezone-aware dates
+                now = datetime.now(timezone.utc)
+                if market.event_date.tzinfo is None:
+                    # Assume UTC if market date is naive
+                    m_date = market.event_date.replace(tzinfo=timezone.utc)
+                else:
+                    m_date = market.event_date
+                
+                days_until = (m_date - now).days
+                if 3 <= days_until <= 7:
+                    signals['event_proximity'] = days_until
+            except Exception:
+                pass # safely ignore timezone errors
         
         # Check if signals warrant alert
         return self._evaluate_signals(market, current_snapshot, signals)
@@ -204,7 +226,6 @@ class MarketMonitor:
     def _evaluate_signals(self, market, snapshot, signals: Dict) -> HotMarket:
             """Evaluate signals and determine if market warrants alert"""
             
-            # ... (Existing initial checks for volume/relevance remain the same) ...
             lowest_threshold = min(self.min_volume_tier_s, self.min_volume_tier_a, self.min_volume_tier_c)
             if snapshot.volume < lowest_threshold: return None
 
@@ -217,8 +238,7 @@ class MarketMonitor:
             triggered_signals = []
             tier = AlertTier.BACKGROUND
             
-            # --- 1. MOVEMENT SIGNALS (Change Detector) ---
-            # Tier 1: URGENT
+            # --- 1. MOVEMENT SIGNALS ---
             if signals.get('volume_spike_1h', 0) > 3.0:
                 triggered_signals.append('volume_spike_300_1h')
                 tier = AlertTier.URGENT
@@ -227,7 +247,6 @@ class MarketMonitor:
                 triggered_signals.append('odds_swing_20_1h')
                 tier = AlertTier.URGENT
             
-            # Tier 2: DAILY (Movement)
             if signals.get('volume_spike_6h', 0) > 2.0 and tier != AlertTier.URGENT:
                 triggered_signals.append('sustained_volume_growth')
                 tier = AlertTier.DAILY
@@ -240,15 +259,9 @@ class MarketMonitor:
                 triggered_signals.append('odds_movement_15_6h')
                 tier = AlertTier.DAILY
 
-            # --- 2. VALUE SIGNALS (New: Relevance Detector) ---
-            # If it hasn't triggered a movement alert, check if it's just a "Major Market"
-            # that should be in the daily digest anyway.
-            
+            # --- 2. VALUE SIGNALS ---
             if tier == AlertTier.BACKGROUND:
-                # Define "High Interest" thresholds (higher than minimums)
-                # e.g., If an NFL game has >$50k volume, we want to see it.
                 value_threshold = 50000.0 if topic_info['tier'] == 'S' else 150000.0
-                
                 if snapshot.volume >= value_threshold:
                     triggered_signals.append('high_value_market')
                     tier = AlertTier.DAILY
@@ -268,6 +281,7 @@ class MarketMonitor:
                     **signals
                 }
             )
+
     def _get_min_volume_for_tier(self, tier: str) -> float:
         """Get minimum volume threshold based on topic tier"""
         if tier == 'S':
@@ -279,13 +293,11 @@ class MarketMonitor:
     
     def _process_alerts(self, hot_markets: List[HotMarket]) -> None:
         """Process and send alerts for hot markets"""
-        
         urgent = [m for m in hot_markets if m.tier == AlertTier.URGENT]
         daily = [m for m in hot_markets if m.tier == AlertTier.DAILY]
         
         if urgent:
             self.alert_manager.send_urgent_alerts(urgent)
-        
         if daily:
             self.alert_manager.queue_for_digest(daily)
     
@@ -337,7 +349,7 @@ def main():
     initial_thread = threading.Thread(target=monitor.check_markets)
     initial_thread.start()
     
-    # Main loop (Starts immediately, preventing platform timeout/re-fork)
+    # Main loop
     logger.info("Bot is now running. Scheduler loop active.")
     logger.info("="*60)
     

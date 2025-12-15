@@ -5,7 +5,7 @@ Stores market snapshots and alert logs using SQLAlchemy.
 """
 
 import os
-import hashlib  # <--- ADD THIS IMPORT
+import hashlib  
 from datetime import datetime, timedelta
 from typing import List, Optional
 from sqlalchemy import create_engine, Column, String, Float, DateTime, Integer, Text, Boolean
@@ -355,21 +355,25 @@ class TopicCache(Base):
 
     @classmethod
     def set(cls, title: str, data: dict):
-        # Generate hash key from title
-        key = hashlib.sha256(title.encode('utf-8', errors='ignore')).hexdigest()
-        
-        session = SessionLocal()
-        try:
-            cache = cls(
-                topic_hash=key,  # Store the hash, not the full title
-                is_relevant=data['is_relevant'],
-                tier=data['tier'],
-                reasoning=data['reasoning']
-            )
-            session.merge(cache) # Update if exists
-            session.commit()
-        except Exception as e:
-            session.rollback()
-            print(f"Cache error: {e}")
-        finally:
-            session.close()
+            # Generate hash key from title
+            key = hashlib.sha256(title.encode('utf-8', errors='ignore')).hexdigest()
+            
+            session = SessionLocal()
+            try:
+                cache = cls(
+                    topic_hash=key,
+                    is_relevant=data['is_relevant'],
+                    tier=data['tier'],
+                    reasoning=data['reasoning']
+                )
+                session.merge(cache) 
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                # SILENCE THE ERROR: It just means another thread beat us to it.
+                if "UniqueViolation" in str(e) or "unique constraint" in str(e):
+                    pass 
+                else:
+                    print(f"Cache error: {e}")
+            finally:
+                session.close()
