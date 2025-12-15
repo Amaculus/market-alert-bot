@@ -1,764 +1,280 @@
 """
-AI-Powered Topic Relevance Checker with Static Rules Optimization
+AI-Powered Topic Relevance Checker
+Optimized for Sports/Betting (ActionNetwork/VegasInsider focus)
+Includes:
+1. Aggressive Noise Filtering (Blacklist)
+2. Content Prioritization (Whitelist)
+3. Parallel Processing with Rate Limiting (ThreadPool)
 """
 
 import os
 import re
-from typing import Dict
 import logging
+import time
+import threading
+from typing import Dict, List, Any, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from openai import OpenAI
 from models import TopicCache
 
 logger = logging.getLogger(__name__)
 
-
 class RelevanceChecker:
-    """Checks if market topics are relevant using Regex first, then AI"""
-
-    # === STATIC RULES - Expanded ===
-    STATIC_RELEVANCE_RULES = {
-        # === POLITICS: US (Tier S) ===
-        'trump': ('S', 'US Politics'),
-        'donald trump': ('S', 'US Politics'),
-        'vance': ('S', 'US Politics'),
-        'jd vance': ('S', 'US Politics'),
-        'kamala': ('S', 'US Politics'),
-        'harris': ('S', 'US Politics'),
-        'biden': ('S', 'US Politics'),
-        'desantis': ('A', 'US Politics'),
-        'newsom': ('A', 'US Politics'),
-        'rfk': ('A', 'US Politics'),
-        'kennedy': ('A', 'US Politics'),
-        'election': ('S', 'Politics'),
-        'president': ('S', 'Politics'),
-        'senate': ('S', 'Politics'),
-        'congress': ('A', 'Politics'),
-        'republican': ('A', 'Politics'),
-        'democrat': ('A', 'Politics'),
-        'gop': ('A', 'Politics'),
-        'electoral': ('S', 'Politics'),
-        'swing state': ('A', 'Politics'),
-        'cabinet': ('A', 'Politics'),
-        'secretary': ('A', 'Politics'),
-        'nominee': ('A', 'Politics'),
-        'supreme court': ('S', 'Politics'),
-        'scotus': ('S', 'Politics'),
-
-        'esports': ('B', 'Esports'),
-        'lol': ('B', 'Esports'),
-        'league of legends': ('B', 'Esports'),
-        'worlds': ('B', 'Esports'),
-        'gen.g': ('B', 'Esports Team'),
-        't1': ('B', 'Esports Team'),
-        'faker': ('A', 'Esports Star'),
-        'valorant': ('B', 'Esports'),
-        'dota': ('B', 'Esports'),
-        'csgo': ('B', 'Esports'),
-        'cs2': ('B', 'Esports'),
-        'the international': ('B', 'Esports Event'),
-
-                # === College Sports (Major Programs) ===
-        'arkansas': ('A', 'College Team'),
-        'razorbacks': ('A', 'College Team'),
-        'kansas': ('A', 'College Team'),
-        'jayhawks': ('A', 'College Team'),
-        'auburn': ('A', 'College Team'),
-        'creighton': ('B', 'College Team'),
-        'vanderbilt': ('B', 'College Team'),
-        'duke': ('A', 'College Team'),
-        'blue devils': ('A', 'College Team'),
-        'north carolina': ('A', 'College Team'),
-        'unc': ('A', 'College Team'),
-        'tar heels': ('A', 'College Team'),
-        'kentucky': ('A', 'College Team'),
-        'wildcats': ('A', 'College Team'),
-        'gonzaga': ('A', 'College Team'),
-        'villanova': ('A', 'College Team'),
-        'purdue': ('A', 'College Team'),
-        'boilermakers': ('A', 'College Team'),
-        'uconn': ('A', 'College Team'),
-        'huskies': ('A', 'College Team'),
-        'iowa': ('A', 'College Team'),
-        'hawkeyes': ('A', 'College Team'),
-        'baylor': ('A', 'College Team'),
-        'houston': ('A', 'College Team'),
-        'cougars': ('A', 'College Team'),
-        'arizona': ('A', 'College Team'),
-        'ucla': ('A', 'College Team'),
-        'stanford': ('A', 'College Team'),
-        'wisconsin': ('A', 'College Team'),
-        'badgers': ('A', 'College Team'),
-        'indiana': ('A', 'College Team'),
-        'hoosiers': ('A', 'College Team'),
-        'illinois': ('A', 'College Team'),
-        'syracuse': ('B', 'College Team'),
-        'memphis': ('B', 'College Team'),
-        'cincinnati': ('B', 'College Team'),
-        'iowa state': ('A', 'College Team'),
-        'colorado': ('B', 'College Team'),
-        'st. mary\'s': ('B', 'College Team'),
-        'saint mary\'s': ('B', 'College Team'),
-        'san diego state': ('B', 'College Team'),
-        'mcneese': ('C', 'College Team'),
-
-                # === NBA TEAMS (Complete) ===
-        'hawks': ('A', 'NBA Team'),
-        'celtics': ('A', 'NBA Team'),
-        'nets': ('A', 'NBA Team'),
-        'hornets': ('B', 'NBA Team'),
-        'bulls': ('A', 'NBA Team'),
-        'cavaliers': ('A', 'NBA Team'),
-        'cavs': ('A', 'NBA Team'),
-        'mavericks': ('A', 'NBA Team'),
-        'mavs': ('A', 'NBA Team'),
-        'nuggets': ('A', 'NBA Team'),
-        'pistons': ('B', 'NBA Team'),
-        'warriors': ('A', 'NBA Team'),
-        'rockets': ('B', 'NBA Team'),
-        'pacers': ('B', 'NBA Team'),
-        'clippers': ('A', 'NBA Team'),
-        'lakers': ('S', 'NBA Team'),
-        'grizzlies': ('B', 'NBA Team'),
-        'heat': ('A', 'NBA Team'),
-        'bucks': ('A', 'NBA Team'),
-        'timberwolves': ('A', 'NBA Team'),
-        'wolves': ('B', 'NBA Team'),
-        'pelicans': ('B', 'NBA Team'),
-        'knicks': ('A', 'NBA Team'),
-        'thunder': ('A', 'NBA Team'),
-        'magic': ('B', 'NBA Team'),
-        'sixers': ('A', 'NBA Team'),
-        '76ers': ('A', 'NBA Team'),
-        'suns': ('A', 'NBA Team'),
-        'blazers': ('B', 'NBA Team'),
-        'trail blazers': ('B', 'NBA Team'),
-        'kings': ('B', 'NBA Team'),
-        'spurs': ('B', 'NBA Team'),
-        'raptors': ('B', 'NBA Team'),
-        'jazz': ('B', 'NBA Team'),
-        'wizards': ('B', 'NBA Team'),
-
-        # === NHL ===
-        'nhl': ('A', 'League'),
-        'stanley cup': ('A', 'NHL Event'),
-        'hart trophy': ('B', 'NHL Award'),
-        'conn smythe': ('B', 'NHL Award'),
-        # NHL Teams (major markets)
-        'bruins': ('A', 'NHL Team'),
-        'sabres': ('B', 'NHL Team'),
-        'red wings': ('B', 'NHL Team'),
-        'panthers': ('A', 'NHL Team'),
-        'canadiens': ('A', 'NHL Team'),
-        'senators': ('B', 'NHL Team'),
-        'lightning': ('A', 'NHL Team'),
-        'maple leafs': ('A', 'NHL Team'),
-        'blackhawks': ('B', 'NHL Team'),
-        'avalanche': ('A', 'NHL Team'),
-        'stars': ('B', 'NHL Team'),
-        'wild': ('B', 'NHL Team'),
-        'predators': ('B', 'NHL Team'),
-        'blues': ('B', 'NHL Team'),
-        'jets': ('B', 'NHL Team'),
-        'flames': ('B', 'NHL Team'),
-        'oilers': ('A', 'NHL Team'),
-        'canucks': ('B', 'NHL Team'),
-        'golden knights': ('A', 'NHL Team'),
-        'kraken': ('B', 'NHL Team'),
-        'ducks': ('B', 'NHL Team'),
-        'coyotes': ('B', 'NHL Team'),
-        'sharks': ('B', 'NHL Team'),
-        'capitals': ('A', 'NHL Team'),
-        'flyers': ('B', 'NHL Team'),
-        'penguins': ('A', 'NHL Team'),
-        'islanders': ('B', 'NHL Team'),
-        'hurricanes': ('A', 'NHL Team'),
-        'blue jackets': ('B', 'NHL Team'),
-        'devils': ('B', 'NHL Team'),
-        # NHL Players
-        'mcdavid': ('A', 'NHL Star'),
-        'connor mcdavid': ('A', 'NHL Star'),
-        'ovechkin': ('A', 'NHL Star'),
-        'crosby': ('A', 'NHL Star'),
-        'sidney crosby': ('A', 'NHL Star'),
-        'cale makar': ('A', 'NHL Star'),
-        'makar': ('A', 'NHL Star'),
-        'mackinnon': ('A', 'NHL Star'),
-        'draisaitl': ('A', 'NHL Star'),
-        'matthews': ('A', 'NHL Star'),
-        'auston matthews': ('A', 'NHL Star'),
-
-        # === F1 Teams ===
-        'red bull racing': ('A', 'F1 Team'),
-        'red bull': ('A', 'F1 Team'),
-        'ferrari': ('A', 'F1 Team'),
-        'mercedes': ('A', 'F1 Team'),
-        'mclaren': ('A', 'F1 Team'),
-        'aston martin': ('A', 'F1 Team'),
-        'alpine': ('B', 'F1 Team'),
-        'williams': ('B', 'F1 Team'),
-        'haas': ('B', 'F1 Team'),
-        'alfa romeo': ('B', 'F1 Team'),
-        'alphatauri': ('B', 'F1 Team'),
-        'constructors': ('B', 'F1'),
-
-        # === POLITICS: World Leaders (Tier A/B) ===
-        'macron': ('A', 'World Politics'),
-        'xi jinping': ('A', 'World Politics'),
-        'putin': ('A', 'World Politics'),
-        'zelensky': ('A', 'World Politics'),
-        'netanyahu': ('A', 'World Politics'),
-        'trudeau': ('A', 'World Politics'),
-        'starmer': ('A', 'World Politics'),
-        'modi': ('A', 'World Politics'),
-        'pope': ('B', 'Religion'),
-        'pontiff': ('B', 'Religion'),
-        'vatican': ('B', 'Religion'),
-
-        # === CURRENT NEWS FIGURES ===
-        'daniel penny': ('A', 'Current Events'),
-        'luigi mangione': ('A', 'Current Events'),
-        'sam bankman': ('A', 'Current Events'),
-        'sbf': ('A', 'Current Events'),
-        'caroline ellison': ('B', 'Current Events'),
-
-        # === SPORTS: NFL (Tier S/A) ===
-        'nfl': ('S', 'League'),
-        'super bowl': ('S', 'Major Event'),
-        'superbowl': ('S', 'Major Event'),
-        'touchdown': ('A', 'NFL'),
-        'quarterback': ('A', 'NFL'),
-        'chiefs': ('S', 'NFL Team'),
-        'eagles': ('A', 'NFL Team'),
-        'cowboys': ('A', 'NFL Team'),
-        '49ers': ('A', 'NFL Team'),
-        'niners': ('A', 'NFL Team'),
-        'ravens': ('A', 'NFL Team'),
-        'bills': ('A', 'NFL Team'),
-        'lions': ('A', 'NFL Team'),
-        'packers': ('A', 'NFL Team'),
-        'dolphins': ('A', 'NFL Team'),
-        'bengals': ('A', 'NFL Team'),
-        'steelers': ('A', 'NFL Team'),
-        'broncos': ('A', 'NFL Team'),
-        'raiders': ('A', 'NFL Team'),
-        'chargers': ('A', 'NFL Team'),
-        'jets': ('A', 'NFL Team'),
-        'giants': ('A', 'NFL Team'),
-        'patriots': ('A', 'NFL Team'),
-        'seahawks': ('A', 'NFL Team'),
-        'commanders': ('A', 'NFL Team'),
-        'bears': ('A', 'NFL Team'),
-        'vikings': ('A', 'NFL Team'),
-        'saints': ('A', 'NFL Team'),
-        'falcons': ('A', 'NFL Team'),
-        'buccaneers': ('A', 'NFL Team'),
-        'bucs': ('A', 'NFL Team'),
-        'panthers': ('A', 'NFL Team'),
-        'cardinals': ('A', 'NFL Team'),
-        'rams': ('A', 'NFL Team'),
-        'texans': ('A', 'NFL Team'),
-        'colts': ('A', 'NFL Team'),
-        'jaguars': ('A', 'NFL Team'),
-        'titans': ('A', 'NFL Team'),
-        'browns': ('A', 'NFL Team'),
-        'mahomes': ('S', 'Star Player'),
-        'kelce': ('S', 'Star Player'),
-        'travis kelce': ('S', 'Star Player'),
-        'lamar jackson': ('A', 'Star Player'),
-        'josh allen': ('A', 'Star Player'),
-        'burrow': ('A', 'Star Player'),
-        'joe burrow': ('A', 'Star Player'),
-        'rodgers': ('A', 'Star Player'),
-        'aaron rodgers': ('A', 'Star Player'),
-        'dak prescott': ('A', 'Star Player'),
-        'cj stroud': ('A', 'Star Player'),
-        'hurts': ('A', 'Star Player'),
-        'jalen hurts': ('A', 'Star Player'),
-        'purdy': ('A', 'Star Player'),
-        'brock purdy': ('A', 'Star Player'),
-        'garrett wilson': ('A', 'Star Player'),
-        'mvp': ('A', 'Award'),
-
-        # === SPORTS: NBA (Tier S/A) ===
-        'nba': ('S', 'League'),
-        'finals': ('S', 'Major Event'),
-        'playoffs': ('A', 'Event'),
-        'lakers': ('S', 'NBA Team'),
-        'celtics': ('A', 'NBA Team'),
-        'warriors': ('A', 'NBA Team'),
-        'heat': ('A', 'NBA Team'),
-        'knicks': ('A', 'NBA Team'),
-        'nets': ('A', 'NBA Team'),
-        'bucks': ('A', 'NBA Team'),
-        'sixers': ('A', 'NBA Team'),
-        '76ers': ('A', 'NBA Team'),
-        'suns': ('A', 'NBA Team'),
-        'mavericks': ('A', 'NBA Team'),
-        'mavs': ('A', 'NBA Team'),
-        'nuggets': ('A', 'NBA Team'),
-        'clippers': ('A', 'NBA Team'),
-        'timberwolves': ('A', 'NBA Team'),
-        'grizzlies': ('A', 'NBA Team'),
-        'pelicans': ('A', 'NBA Team'),
-        'spurs': ('A', 'NBA Team'),
-        'thunder': ('A', 'NBA Team'),
-        'lebron': ('S', 'Star Player'),
-        'lebron james': ('S', 'Star Player'),
-        'curry': ('S', 'Star Player'),
-        'steph curry': ('S', 'Star Player'),
-        'stephen curry': ('S', 'Star Player'),
-        'durant': ('A', 'Star Player'),
-        'kevin durant': ('A', 'Star Player'),
-        'giannis': ('A', 'Star Player'),
-        'antetokounmpo': ('A', 'Star Player'),
-        'jokic': ('A', 'Star Player'),
-        'nikola jokic': ('A', 'Star Player'),
-        'luka': ('A', 'Star Player'),
-        'doncic': ('A', 'Star Player'),
-        'tatum': ('A', 'Star Player'),
-        'jayson tatum': ('A', 'Star Player'),
-        'wembanyama': ('A', 'Star Player'),
-        'wemby': ('A', 'Star Player'),
-        'victor wembanyama': ('A', 'Star Player'),
-        'anthony edwards': ('A', 'Star Player'),
-
-        # === SPORTS: MLB (Tier A/S) ===
-        'mlb': ('S', 'League'),
-        'world series': ('S', 'Major Event'),
-        'yankees': ('A', 'MLB Team'),
-        'dodgers': ('S', 'MLB Team'),
-        'mets': ('A', 'MLB Team'),
-        'red sox': ('A', 'MLB Team'),
-        'cubs': ('A', 'MLB Team'),
-        'white sox': ('A', 'MLB Team'),
-        'phillies': ('A', 'MLB Team'),
-        'braves': ('A', 'MLB Team'),
-        'astros': ('A', 'MLB Team'),
-        'padres': ('A', 'MLB Team'),
-        'mariners': ('A', 'MLB Team'),
-        'orioles': ('A', 'MLB Team'),
-        'twins': ('A', 'MLB Team'),
-        'guardians': ('A', 'MLB Team'),
-        'royals': ('A', 'MLB Team'),
-        'rangers': ('A', 'MLB Team'),
-        'blue jays': ('A', 'MLB Team'),
-        'rays': ('A', 'MLB Team'),
-        'marlins': ('B', 'MLB Team'),
-        'reds': ('B', 'MLB Team'),
-        'pirates': ('B', 'MLB Team'),
-        'rockies': ('B', 'MLB Team'),
-        'diamondbacks': ('B', 'MLB Team'),
-        'athletics': ('B', 'MLB Team'),
-        'nationals': ('B', 'MLB Team'),
-        'brewers': ('B', 'MLB Team'),
-        'tigers': ('B', 'MLB Team'),
-        'angels': ('B', 'MLB Team'),
-        'ohtani': ('S', 'Global Star'),
-        'shohei': ('S', 'Global Star'),
-        'shohei ohtani': ('S', 'Global Star'),
-        'aaron judge': ('A', 'Star Player'),
-        'judge': ('A', 'Star Player'),
-        'harper': ('A', 'Star Player'),
-        'bryce harper': ('A', 'Star Player'),
-        'soto': ('A', 'Star Player'),
-        'juan soto': ('A', 'Star Player'),
-        'mookie': ('A', 'Star Player'),
-        'betts': ('A', 'Star Player'),
-        'home run': ('A', 'MLB'),
-        'cy young': ('A', 'Award'),
-
-        # === SPORTS: EPL/Soccer (Tier A) ===
-        'epl': ('A', 'League'),
-        'premier league': ('A', 'League'),
-        'champions league': ('A', 'Major Event'),
-        'world cup': ('S', 'Global Event'),
-        'la liga': ('A', 'League'),
-        'serie a': ('A', 'League'),
-        'bundesliga': ('A', 'League'),
-        'fa cup': ('A', 'Event'),
-        # EPL Teams
-        'manchester united': ('A', 'EPL Team'),
-        'man united': ('A', 'EPL Team'),
-        'man utd': ('A', 'EPL Team'),
-        'manchester city': ('A', 'EPL Team'),
-        'man city': ('A', 'EPL Team'),
-        'liverpool': ('A', 'EPL Team'),
-        'arsenal': ('A', 'EPL Team'),
-        'chelsea': ('A', 'EPL Team'),
-        'tottenham': ('A', 'EPL Team'),
-        'spurs': ('A', 'EPL Team'),
-        'newcastle': ('A', 'EPL Team'),
-        'aston villa': ('A', 'EPL Team'),
-        'west ham': ('A', 'EPL Team'),
-        'brighton': ('A', 'EPL Team'),
-        'brentford': ('B', 'EPL Team'),
-        'wolves': ('B', 'EPL Team'),
-        'wolverhampton': ('B', 'EPL Team'),
-        'crystal palace': ('B', 'EPL Team'),
-        'fulham': ('B', 'EPL Team'),
-        'everton': ('B', 'EPL Team'),
-        'nottingham': ('B', 'EPL Team'),
-        'bournemouth': ('B', 'EPL Team'),
-        'leicester': ('B', 'EPL Team'),
-        'ipswich': ('B', 'EPL Team'),
-        'southampton': ('B', 'EPL Team'),
-        # EPL Players
-        'salah': ('A', 'EPL Star'),
-        'mohamed salah': ('A', 'EPL Star'),
-        'haaland': ('A', 'Star Player'),
-        'erling': ('A', 'Star Player'),
-        'saka': ('A', 'EPL Star'),
-        'bukayo saka': ('A', 'EPL Star'),
-        'son': ('A', 'EPL Star'),
-        'heung-min son': ('A', 'EPL Star'),
-        'heung min son': ('A', 'EPL Star'),
-        'kane': ('A', 'Star Player'),
-        'harry kane': ('A', 'Star Player'),
-        'rashford': ('A', 'EPL Star'),
-        'bruno fernandes': ('A', 'EPL Star'),
-        'de bruyne': ('A', 'EPL Star'),
-        'foden': ('A', 'EPL Star'),
-        'phil foden': ('A', 'EPL Star'),
-        'palmer': ('A', 'EPL Star'),
-        'cole palmer': ('A', 'EPL Star'),
-        'jamie vardy': ('A', 'EPL Star'),
-        'vardy': ('A', 'EPL Star'),
-        'diogo jota': ('A', 'EPL Star'),
-        'jota': ('A', 'EPL Star'),
-        # Other soccer
-        'messi': ('S', 'Global Star'),
-        'lionel messi': ('S', 'Global Star'),
-        'ronaldo': ('S', 'Global Star'),
-        'cristiano': ('S', 'Global Star'),
-        'mbappe': ('S', 'Star Player'),
-        'kylian': ('S', 'Star Player'),
-        'bellingham': ('A', 'Star Player'),
-        'jude bellingham': ('A', 'Star Player'),
-        'yamal': ('A', 'Star Player'),
-        'neymar': ('A', 'Star Player'),
-        'barcelona': ('A', 'Soccer'),
-        'real madrid': ('A', 'Soccer'),
-        'psg': ('A', 'Soccer'),
-        'bayern': ('A', 'Soccer'),
-        'juventus': ('A', 'Soccer'),
-        'inter milan': ('A', 'Soccer'),
-        'ac milan': ('A', 'Soccer'),
-        'relegated': ('B', 'Soccer'),
-        'relegation': ('B', 'Soccer'),
-        'goalscorer': ('B', 'Soccer'),
-
-        # === SPORTS: UFC/MMA (Tier A) ===
-        'ufc': ('A', 'Combat Sports'),
-        'mma': ('A', 'Combat Sports'),
-        'bellator': ('B', 'Combat Sports'),
-        'pfl': ('B', 'Combat Sports'),
-        # UFC Fighters
-        'mcgregor': ('A', 'Star Fighter'),
-        'conor mcgregor': ('A', 'Star Fighter'),
-        'jon jones': ('A', 'Star Fighter'),
-        'jones': ('B', 'Fighter'),
-        'adesanya': ('A', 'Star Fighter'),
-        'izzy': ('A', 'Star Fighter'),
-        'usman': ('A', 'Star Fighter'),
-        'khabib': ('A', 'Star Fighter'),
-        'holloway': ('A', 'Star Fighter'),
-        'max holloway': ('A', 'Star Fighter'),
-        'topuria': ('A', 'Star Fighter'),
-        'ilia topuria': ('A', 'Star Fighter'),
-        'volkanovski': ('A', 'Star Fighter'),
-        'volk': ('A', 'Star Fighter'),
-        'o\'malley': ('A', 'Star Fighter'),
-        'sean o\'malley': ('A', 'Star Fighter'),
-        'pereira': ('A', 'Star Fighter'),
-        'alex pereira': ('A', 'Star Fighter'),
-        'chimaev': ('A', 'Star Fighter'),
-        'khamzat': ('A', 'Star Fighter'),
-        'blanchfield': ('B', 'Fighter'),
-        'barber': ('B', 'Fighter'),
-        'ponzinibbio': ('B', 'Fighter'),
-        'machado garry': ('B', 'Fighter'),
-
-        # === SPORTS: Other ===
-        'f1': ('A', 'Motorsports'),
-        'formula 1': ('A', 'Motorsports'),
-        'formula one': ('A', 'Motorsports'),
-        'nascar': ('A', 'Motorsports'),
-        'golf': ('A', 'Sport'),
-        'pga': ('A', 'Golf'),
-        'masters': ('A', 'Golf'),
-        'tennis': ('A', 'Sport'),
-        'wimbledon': ('A', 'Tennis'),
-        'us open': ('A', 'Tennis/Golf'),
-        'australian open': ('A', 'Tennis'),
-        'french open': ('A', 'Tennis'),
-        'verstappen': ('A', 'Star Driver'),
-        'max verstappen': ('A', 'Star Driver'),
-        'hamilton': ('A', 'Star Driver'),
-        'lewis hamilton': ('A', 'Star Driver'),
-        'tiger woods': ('A', 'Golf Legend'),
-        'djokovic': ('A', 'Tennis Star'),
-        'nadal': ('A', 'Tennis Star'),
-        'federer': ('A', 'Tennis Star'),
-        'sinner': ('A', 'Tennis Star'),
-        'jannik sinner': ('A', 'Tennis Star'),
-        'alcaraz': ('A', 'Tennis Star'),
-        'carlos alcaraz': ('A', 'Tennis Star'),
-
-        # === College Sports ===
-        'ncaa': ('A', 'College Sports'),
-        'march madness': ('S', 'College Event'),
-        'college football': ('A', 'College Sports'),
-        'cfp': ('A', 'College Football'),
-        'clemson': ('A', 'College Team'),
-        'alabama': ('A', 'College Team'),
-        'georgia': ('A', 'College Team'),
-        'ohio state': ('A', 'College Team'),
-        'michigan': ('A', 'College Team'),
-        'texas': ('A', 'College Team'),
-        'oregon': ('A', 'College Team'),
-        'notre dame': ('A', 'College Team'),
-        'lsu': ('A', 'College Team'),
-        'usc': ('A', 'College Team'),
-        'florida': ('A', 'College Team'),
-        'penn state': ('A', 'College Team'),
-        'tennessee': ('A', 'College Team'),
-        'oklahoma': ('A', 'College Team'),
-
-        # === MUSIC & POP CULTURE (Tier S/A) ===
-        'taylor swift': ('S', 'Megastar'),
-        'swift': ('S', 'Megastar'),
-        'beyonce': ('S', 'Megastar'),
-        'beyoncé': ('S', 'Megastar'),
-        'drake': ('S', 'Megastar'),
-        'kendrick': ('S', 'Megastar'),
-        'kendrick lamar': ('S', 'Megastar'),
-        'billie eilish': ('A', 'Pop Star'),
-        'the weeknd': ('A', 'Pop Star'),
-        'bad bunny': ('A', 'Global Star'),
-        'dua lipa': ('A', 'Pop Star'),
-        'harry styles': ('A', 'Pop Star'),
-        'adele': ('A', 'Pop Star'),
-        'lady gaga': ('A', 'Pop Star'),
-        'rihanna': ('A', 'Pop Star'),
-        'justin bieber': ('A', 'Pop Star'),
-        'travis scott': ('A', 'Rap Star'),
-        'kanye': ('A', 'Celeb'),
-        'ye': ('A', 'Celeb'),
-        'kim kardashian': ('A', 'Celeb'),
-        'kardashian': ('A', 'Celeb'),
-        'elon musk': ('S', 'Tech Celeb'),
-        'elon': ('A', 'Tech Celeb'),
-        'musk': ('A', 'Tech Celeb'),
-        'zuckerberg': ('A', 'Tech Celeb'),
-        'bezos': ('A', 'Tech Celeb'),
-        'oscar': ('S', 'Awards'),
-        'oscars': ('S', 'Awards'),
-        'academy award': ('S', 'Awards'),
-        'grammy': ('S', 'Awards'),
-        'grammys': ('S', 'Awards'),
-        'emmy': ('A', 'Awards'),
-        'emmys': ('A', 'Awards'),
-        'golden globe': ('A', 'Awards'),
-        'super bowl halftime': ('S', 'Event'),
-        'coachella': ('A', 'Event'),
-
-        # === GAMING (Tier S/A) ===
-        'gta': ('S', 'Major Game'),
-        'gta 6': ('S', 'Major Game'),
-        'gta vi': ('S', 'Major Game'),
-        'grand theft auto': ('S', 'Major Game'),
-        'call of duty': ('A', 'Major Game'),
-        'fortnite': ('A', 'Major Game'),
-        'nintendo': ('A', 'Gaming'),
-        'playstation': ('A', 'Gaming'),
-        'xbox': ('A', 'Gaming'),
-
-        # === TECH (Tier A/B) ===
-        'apple': ('A', 'Tech'),
-        'iphone': ('A', 'Tech'),
-        'google': ('A', 'Tech'),
-        'microsoft': ('A', 'Tech'),
-        'tesla': ('A', 'Tech'),
-        'openai': ('A', 'Tech'),
-        'chatgpt': ('A', 'Tech'),
-        'spacex': ('A', 'Tech'),
-        'twitter': ('A', 'Tech'),
-        'tiktok': ('A', 'Tech'),
-
-        # === ECONOMY (Tier B) ===
-        'fed': ('B', 'Economy'),
-        'federal reserve': ('B', 'Economy'),
-        'interest rate': ('B', 'Economy'),
-        'rate cut': ('B', 'Economy'),
-        'inflation': ('B', 'Economy'),
-        'recession': ('B', 'Economy'),
-
-        # === CRYPTO (Tier A/B) ===
-        'bitcoin': ('A', 'Crypto'),
-        'btc': ('A', 'Crypto'),
-        'ethereum': ('A', 'Crypto'),
-        'eth': ('A', 'Crypto'),
-        'dogecoin': ('A', 'Crypto'),
-        'doge': ('A', 'Crypto'),
-        'solana': ('B', 'Crypto'),
-        'xrp': ('B', 'Crypto'),
-        'crypto': ('B', 'Crypto'),
-        'coinbase': ('B', 'Crypto'),
-        'kraken': ('B', 'Crypto'),
-    }
-
-    IRRELEVANT_KEYWORDS = {
-        # Weather
-        'weather', 'temperature', 'snowfall', 'rainfall', 'rain', 'snow',
-        'humidity', 'celsius', 'fahrenheit',
-        # Local/Municipal
-        'local', 'municipal', 'county', 'sheriff', 'mayor', 'city council',
-        'subway', 'transit', 'bus route',
-        # Prop bets / Measures
-        'measure', 'proposition',
-        # Meta/Platform
-        'daily active users', 'friend.tech', 'manifold', 'metaculus',
-        'polymarket volume', 'kalshi volume',
-        # Natural disasters (not sports/entertainment)
-        'earthquake', 'megaquake', 'tsunami', 'hurricane',
-        'volcano', 'eruption',
-        # Nuclear/War
-        'nuclear weapon', 'nuclear detonation',
-        # Meme/Obscure
-        'grimace coin', 'grimace vs',
-
-                # AI models (niche tech)
-        'deepseek', 'gemini model', 'top ai model',
+    # === CONFIGURATION ===
+    MAX_WORKERS = 5            # Number of parallel AI threads
+    MAX_RPM = 50               # Max OpenAI requests per minute (Safety buffer)
+    
+    # === 1. BLACKLIST (Immediate Fail) ===
+    BLACKLIST_KEYWORDS = [
+        # Weather & Science (High noise on prediction markets)
+        r'temperature', r'degrees?', r'fahrenheit', r'celsius', 
+        r'rain(fall)?', r'snow(fall)?', r'precipitation', r'weather',
+        r'heat index', r'wind speed', r'NOAA', r'NASA', r'hurricane',
         
-        # Weather/Climate
-        'hottest on record', 'coldest on record',
+        # Niche Finance (Irrelevant for sports/pop-culture)
+        r'closing price', r'market cap', r'fed funds', r'treasury', 
+        r'mortgage rate', r'gas price', r'brent crude', r'WTI',
+        r'eur/usd', r'yen', r'forex', r'commodity', 
+        r'jobless claims', r'cpi', r'ppi', r'inflation',
         
-        # War/Geopolitics (not sports/entertainment)
-        'capture', 'territory', 'oblast', 'offensive',
+        # Spam / Recurring / Low Value
+        r'TSA check(point)?s?', r'covid', r'pandemic', 
+        r'spotify', r'billboard', r'metacritic', r'rotten tomatoes',
+        r'box office',
         
-        # Niche tech/crypto
-        'satoshi', 'pornhub',
+        # Local/Bureaucratic Politics
+        r'mayor of', r'city council', r'comptroller', r'local election',
+        r'transit', r'subway', r'approval rating'
+    ]
+
+    # === 2. WHITELIST (Immediate Pass) ===
+    RELEVANCE_CATEGORIES = {
+        # --- TIER S: MAJOR SPORTS & BETTING ---
+        'SPORTS_MAJOR': {
+            'tier': 'S',
+            'keywords': [
+                r'\bNFL\b', r'\bNBA\b', r'\bMLB\b', r'\bNHL\b', r'\bNCAAF\b', r'\bNCAAB\b',
+                r'\bUFC\b', r'Super Bowl', r'World Series', r'Stanley Cup', 
+                r'March Madness', r'Playoff', r'Championship', r'Premier League'
+            ]
+        },
+        'SPORTS_BETTING': {
+            'tier': 'S',
+            'keywords': [
+                r'moneyline', r'spread', r'over/under', r'parlay', r'prop bet',
+                r'draft pick', r'MVP', r'Heisman', r'rookie of the year',
+                r'touchdown', r'passing yards', r'rushing yards'
+            ]
+        },
+        
+        # --- TIER A: HIGH INTEREST ---
+        'POP_CULTURE': {
+            'tier': 'A',
+            'keywords': [
+                r'Taylor Swift', r'Drake', r'Oscar', r'Grammy',
+                r'GTA', r'GTA6', r'Grand Theft Auto', r'Crypto', r'Bitcoin', r'BTC'
+            ]
+        },
+        'POLITICS_US': {
+            'tier': 'A',
+            'keywords': [
+                r'President', r'White House', r'Senate', r'Congress', 
+                r'Election', r'Democrat', r'Republican', r'Trump', r'Harris'
+            ]
+        }
     }
 
     def __init__(self):
+        # OpenAI Setup
         api_key = os.getenv('OPENAI_API_KEY')
         if not api_key:
-            logger.warning("OPENAI_API_KEY not set - using fallback relevance checking")
+            logger.warning("OPENAI_API_KEY not set - AI features disabled")
             self.client = None
         else:
             self.client = OpenAI(api_key=api_key)
         
-        self.ai_call_count = 0
-    
-    def check_relevance(self, market_title: str) -> Dict:
-        """Check if a market topic is relevant"""
+        # Rate Limiting State
+        self._rate_lock = threading.Lock()
+        self._minute_start = time.time()
+        self._request_count = 0
+
+    def check_relevance_batch(self, titles: List[str]) -> Dict[str, Dict[str, Any]]:
+        """
+        Process a batch of titles in parallel.
+        1. Checks Cache/Blacklist/Whitelist (Fast, Main Thread)
+        2. Sends remaining to OpenAI (Parallel, Rate Limited)
+        """
+        results = {}
+        to_process_ai = []
+
+        # Step 1: Fast Static Checks
+        for title in titles:
+            static_result = self._check_static_rules(title)
+            if static_result:
+                results[title] = static_result
+            else:
+                to_process_ai.append(title)
+
+        # Step 2: Parallel AI Checks
+        if to_process_ai and self.client:
+            logger.info(f"Checking {len(to_process_ai)} markets with AI (Parallel)...")
+            
+            with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as executor:
+                # Map future to title
+                future_to_title = {
+                    executor.submit(self._check_with_ai_throttled, title): title 
+                    for title in to_process_ai
+                }
+                
+                for future in as_completed(future_to_title):
+                    title = future_to_title[future]
+                    try:
+                        results[title] = future.result()
+                    except Exception as e:
+                        logger.error(f"Error processing '{title}': {e}")
+                        # Fallback if AI crashes
+                        results[title] = {
+                            'is_relevant': False, 
+                            'tier': 'C', 
+                            'reasoning': 'AI Error',
+                            'topic': self._extract_topic(title)
+                        }
         
-        # 1. Check Database Cache
+        # Fill in any missing (e.g., if no AI client)
+        for title in to_process_ai:
+            if title not in results:
+                results[title] = {
+                    'is_relevant': False, 
+                    'tier': 'C', 
+                    'reasoning': 'No AI Client',
+                    'topic': self._extract_topic(title)
+                }
+
+        return results
+
+    def _check_static_rules(self, title: str) -> Optional[Dict]:
+        """Checks DB Cache, Blacklist, and Whitelist. Returns None if AI is needed."""
+        
+        # 1. DB Cache
         try:
-            cached = TopicCache.get(market_title)
+            cached = TopicCache.get(title)
             if cached:
                 return {
                     'is_relevant': cached.is_relevant,
                     'tier': cached.tier,
                     'reasoning': f"[CACHED] {cached.reasoning}",
-                    'topic': self._extract_topic(market_title)
+                    'topic': self._extract_topic(title)
                 }
         except Exception:
             pass
-        
-        topic = self._extract_topic(market_title)
-        title_lower = market_title.lower()
-        
-        def cache_and_return(result):
-            try:
-                TopicCache.set(market_title, result)
-            except Exception:
-                pass
-            return result
-        
-        # 2. Check Irrelevant Keywords (Fast Fail)
-        for keyword in self.IRRELEVANT_KEYWORDS:
-            if keyword in title_lower:
-                result = {
+
+        title_lower = title.lower()
+        topic = self._extract_topic(title)
+
+        # 2. Blacklist (Hard Pass)
+        for pattern in self.BLACKLIST_KEYWORDS:
+            if re.search(pattern, title_lower):
+                return self._cache_and_return(title, {
                     'is_relevant': False,
                     'tier': 'C',
-                    'reasoning': f'[RULE:SKIP] {keyword}',
+                    'reasoning': f"[BLACKLIST] Matched '{pattern}'",
                     'topic': topic
-                }
-                logger.debug(f"SKIP: {market_title[:50]}...")
-                return cache_and_return(result)
+                })
 
-        # 3. Check Static Relevant Rules (Fast Pass)
-        for keyword, (tier, reason) in self.STATIC_RELEVANCE_RULES.items():
-            if keyword in title_lower:
-                result = {
-                    'is_relevant': True,
-                    'tier': tier,
-                    'reasoning': f'[RULE] {reason} ({keyword})',
-                    'topic': topic
-                }
-                return cache_and_return(result)
+        # 3. Whitelist (Fast Pass)
+        for category, data in self.RELEVANCE_CATEGORIES.items():
+            for pattern in data['keywords']:
+                if re.search(pattern, title_lower, re.IGNORECASE):
+                    return self._cache_and_return(title, {
+                        'is_relevant': True,
+                        'tier': data['tier'],
+                        'reasoning': f"[WHITELIST] Matched {category} keyword '{pattern}'",
+                        'topic': topic
+                    })
         
-        # 4. Use AI for everything else
-        if self.client:
-            self.ai_call_count += 1
-            logger.info(f"[AI #{self.ai_call_count}] {market_title[:80]}...")
-            result = self._check_with_ai(market_title, topic)
-            logger.info(f"[AI RESULT] rel={result['is_relevant']}, tier={result['tier']}")
-            return cache_and_return(result)
-        else:
-            return {
-                'is_relevant': True,
-                'tier': 'B',
-                'reasoning': '[FALLBACK] AI unavailable',
-                'topic': topic
-            }
-    
-    def _extract_topic(self, title: str) -> str:
-        title = re.sub(r'will\s+', '', title, flags=re.IGNORECASE)
-        title = re.sub(r'\?', '', title)
-        words = title.strip().split()[:4]
-        return ' '.join(words)
-    
-    def _check_with_ai(self, market_title: str, topic: str) -> Dict:
+        return None
+
+    def _check_with_ai_throttled(self, title: str) -> Dict:
+        """Wrapper for AI call that enforces rate limits."""
+        self._wait_for_rate_limit()
+        return self._check_with_ai_logic(title)
+
+    def _wait_for_rate_limit(self):
+        """Thread-safe rate limiter."""
+        with self._rate_lock:
+            now = time.time()
+            # Reset counter if a minute has passed
+            if now - self._minute_start >= 60:
+                self._minute_start = now
+                self._request_count = 0
+            
+            # Sleep if limit reached
+            if self._request_count >= self.MAX_RPM:
+                sleep_time = 60 - (now - self._minute_start) + 1
+                logger.info(f"Rate limit hit ({self.MAX_RPM}/min). Sleeping {sleep_time:.1f}s...")
+                time.sleep(sleep_time)
+                self._minute_start = time.time()
+                self._request_count = 0
+            
+            self._request_count += 1
+
+    def _check_with_ai_logic(self, market_title: str) -> Dict:
+        """Actual OpenAI API call."""
+        topic = self._extract_topic(market_title)
         try:
-            prompt = f"""Is this prediction market relevant for sports/entertainment betting sites?
+            prompt = f"""Is this prediction market relevant for a Sports Betting & Pop Culture news site (ActionNetwork/Barstool)?
 
 Market: "{market_title}"
 
-Reply in exactly this format:
-RELEVANT: YES or NO
-TIER: S (A-list celebrity/major event), A (popular), or C (niche)
-REASON: one sentence"""
+Rules:
+- YES: Sports, Betting, Major US Politics, Top Celebs, Big Tech (GTA/Crypto).
+- NO: Weather, obscure finance, local politics, science.
+
+Reply strictly:
+RELEVANT: YES/NO
+TIER: S (Major Sport), A (High Interest), B (Standard)
+REASON: Brief phrase"""
 
             response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=60,
-                temperature=0.1
+                temperature=0.0
             )
             
             text = response.choices[0].message.content
             is_relevant = 'YES' in text.split('\n')[0].upper()
             
-            tier_match = re.search(r'TIER:\s*([SAC])', text, re.IGNORECASE)
+            tier_match = re.search(r'TIER:\s*([SAB])', text, re.IGNORECASE)
             tier = tier_match.group(1).upper() if tier_match else 'B'
             
             reason_match = re.search(r'REASON:\s*(.+)', text, re.IGNORECASE)
             reasoning = reason_match.group(1).strip() if reason_match else 'AI analysis'
             
-            return {
+            return self._cache_and_return(market_title, {
                 'is_relevant': is_relevant,
                 'tier': tier,
                 'reasoning': f'[AI] {reasoning}',
                 'topic': topic
-            }
+            })
             
         except Exception as e:
-            logger.error(f"AI error: {e}")
+            logger.error(f"AI Call Failed: {e}")
             return {
-                'is_relevant': True,
+                'is_relevant': True, # Fail open (safe)
                 'tier': 'B',
                 'reasoning': '[AI ERROR]',
                 'topic': topic
             }
+
+    def _extract_topic(self, title: str) -> str:
+        clean = re.sub(r'will\s+', '', title, flags=re.IGNORECASE)
+        clean = re.sub(r'\?', '', clean)
+        return ' '.join(clean.strip().split()[:4])
+
+    def _cache_and_return(self, title: str, result: Dict) -> Dict:
+        try:
+            TopicCache.set(title, result)
+        except Exception:
+            pass
+        return result
