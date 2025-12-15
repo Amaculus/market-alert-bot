@@ -56,7 +56,7 @@ class MarketMonitor:
         
         # ABSOLUTE FLOOR: Ignore anything below this before DB/Clustering
         # Using 50000.0 to allow Tier S markets to proceed.
-        self.absolute_min_volume = 50000.0
+        self.absolute_min_volume = 150000.0
         
         logger.info(f"Monitor initialized with {self.check_interval_minutes}min check interval")
         
