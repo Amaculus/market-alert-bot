@@ -1,3 +1,10 @@
+"""
+Alert Manager - Event-First Architecture
+
+Sends alerts about HOT EVENTS (not individual markets)
+with top constituent markets listed.
+"""
+
 import os
 import json
 import requests
@@ -8,6 +15,8 @@ from datetime import datetime
 import logging
 
 from models import AlertLog, DigestQueue
+from clustering import MarketCluster
+from market import Market
 
 logger = logging.getLogger(__name__)
 
@@ -19,10 +28,13 @@ class AlertTier(Enum):
 
 
 @dataclass
-class HotMarket:
-    market: any
+class HotEvent:
+    """Represents a hot event cluster"""
+    cluster: MarketCluster
     tier: AlertTier
-    signals: List[str]
+    topic_tier: str
+    signals: Dict
+    top_markets: List[Market]
     context: Dict
 
 
@@ -31,149 +43,35 @@ class AlertManager:
     def __init__(self):
         self.slack_webhook_url = os.getenv('SLACK_WEBHOOK_URL')
         self.max_alerts_per_hour = int(os.getenv('MAX_ALERTS_PER_HOUR', '5'))
-        self.business_hours_only = os.getenv('BUSINESS_HOURS_ONLY', 'true').lower() == 'true'
+        self.business_hours_only = os.getenv('BUSINESS_HOURS_ONLY', 'false').lower() == 'true'
         
         if not self.slack_webhook_url:
-            logger.warning("SLACK_WEBHOOK_URL not set - alerts will be logged only")
+            logger.warning("SLACK_WEBHOOK_URL not set - alerts logged only")
     
     # === URL HELPERS ===
     
-    def _get_market_url(self, market=None, platform: str = None, raw_data: dict = None) -> Optional[str]:
-        """Generate URL - works with market object OR stored data"""
+    def _get_market_url(self, market: Market) -> Optional[str]:
         try:
-            if market:
-                platform = market.platform
-                raw_data = market.raw_data
+            raw = market.raw_data
             
-            if not platform or not raw_data:
-                return None
-            
-            # Normalize platform string for reliable matching
-            platform_key = platform.lower().strip()
-            
-            if platform_key == 'polymarket':
-                slug = raw_data.get('slug')
+            if market.platform == 'polymarket':
+                slug = raw.get('slug')
                 if slug:
                     return f"https://polymarket.com/event/{slug}"
-                cid = raw_data.get('condition_id')
+                cid = raw.get('condition_id')
                 if cid:
                     return f"https://polymarket.com/event/{cid}"
             
-            elif platform_key == 'kalshi':
-                ticker = raw_data.get('ticker', '')
+            elif market.platform == 'kalshi':
+                ticker = raw.get('ticker', '')
                 if ticker:
                     return f"https://kalshi.com/markets/{ticker.lower()}"
             
             return None
-        except Exception as e:
-            logger.error(f"Error generating URL: {e}")
+        except Exception:
             return None
     
-    def _get_market_details(self, market=None, platform: str = None, raw_data: dict = None) -> Dict:
-        """Extract details - works with market object OR stored data"""
-        details = {
-            'description': None,
-            'rules': None,
-            'outcomes': [],
-            'liquidity': None,
-            'open_interest': None,
-            'spread': None,
-            'source': None,
-            'end_date': None,
-        }
-        
-        if market:
-            platform = market.platform
-            raw_data = market.raw_data
-        
-        if not raw_data:
-            return details
-        
-        # Ensure raw_data is a dict
-        if isinstance(raw_data, str):
-            try:
-                raw = json.loads(raw_data)
-            except:
-                raw = {}
-        else:
-            raw = raw_data
-
-        platform_key = platform.lower() if platform else ''
-        
-        if platform_key == 'polymarket':
-            desc = raw.get('description', '')
-            if desc and len(desc) > 10:
-                details['description'] = desc[:400] + ('...' if len(desc) > 400 else '')
-            
-            outcomes = raw.get('outcomes', [])
-            prices = raw.get('outcomePrices', [])
-            if outcomes and len(outcomes) > 2:
-                outcome_list = []
-                for i, outcome in enumerate(outcomes[:5]):
-                    price = float(prices[i]) * 100 if i < len(prices) else 0
-                    outcome_list.append({'name': outcome, 'odds': price})
-                details['outcomes'] = sorted(outcome_list, key=lambda x: x['odds'], reverse=True)
-            
-            if raw.get('liquidity'):
-                try:
-                    details['liquidity'] = float(raw['liquidity'])
-                except:
-                    pass
-            
-            details['source'] = raw.get('resolutionSource')
-            details['end_date'] = raw.get('end_date_iso')
-            
-        elif platform_key == 'kalshi':
-            if raw.get('subtitle'):
-                details['description'] = raw['subtitle']
-            
-            rules = raw.get('rules_primary', '')
-            if rules:
-                rules = rules.replace('\n', ' ').strip()
-                details['rules'] = rules[:300] + ('...' if len(rules) > 300 else '')
-            
-            if raw.get('open_interest'):
-                try:
-                    details['open_interest'] = int(raw['open_interest'])
-                except:
-                    pass
-            
-            yes_bid = raw.get('yes_bid')
-            yes_ask = raw.get('yes_ask')
-            if yes_bid is not None and yes_ask is not None:
-                details['spread'] = yes_ask - yes_bid
-            
-            details['source'] = raw.get('settlement_source_url')
-            details['end_date'] = raw.get('expiration_time')
-        
-        return details
-    
     # === FORMATTERS ===
-    
-    def _format_odds_from_context(self, context: dict) -> str:
-        """Format odds from stored context"""
-        odds = context.get('odds')
-        if odds is None:
-            return "N/A"
-        pct = odds * 100
-        if pct >= 80:
-            return f"🟢 {pct:.0f}%"
-        elif pct <= 20:
-            return f"🔴 {pct:.0f}%"
-        return f"🟡 {pct:.0f}%"
-    
-    def _format_odds(self, market) -> str:
-        if not market.current_odds:
-            return "N/A"
-        yes_odds = market.current_odds.get('yes')
-        if yes_odds is not None:
-            pct = yes_odds * 100
-            if pct >= 80:
-                return f"🟢 {pct:.0f}%"
-            elif pct <= 20:
-                return f"🔴 {pct:.0f}%"
-            return f"🟡 {pct:.0f}%"
-        return "N/A"
     
     def _format_volume(self, volume: float) -> str:
         if volume >= 1_000_000:
@@ -182,93 +80,124 @@ class AlertManager:
             return f"${volume/1_000:.0f}K"
         return f"${volume:.0f}"
     
-    # === ALERT SENDING ===
+    def _format_odds(self, market: Market) -> str:
+        if not market.current_odds:
+            return ""
+        yes_odds = market.current_odds.get('yes')
+        if yes_odds is not None:
+            pct = yes_odds * 100
+            if pct >= 80:
+                return f"🟢 {pct:.0f}%"
+            elif pct <= 20:
+                return f"🔴 {pct:.0f}%"
+            return f"🟡 {pct:.0f}%"
+        return ""
     
-    def send_urgent_alerts(self, hot_markets: List[HotMarket]) -> None:
+    def _get_signal_emoji(self, signal: str) -> str:
+        if 'volume_spike' in signal:
+            return "📈"
+        elif 'event_in' in signal:
+            return "📅"
+        elif 'multi_platform' in signal:
+            return "🌐"
+        elif 'high_volume' in signal:
+            return "💰"
+        elif 'active_event' in signal:
+            return "🔥"
+        return "📊"
+    
+    # === EVENT ALERTS ===
+    
+    def send_urgent_event_alerts(self, hot_events: List[HotEvent]) -> None:
+        """Send urgent alerts for hot events"""
+        
         if self.business_hours_only and not self._is_business_hours():
             logger.info("Outside business hours - queuing for digest")
-            for hm in hot_markets:
-                self._queue_market(hm)
+            self.queue_events_for_digest(hot_events)
             return
         
         recent_count = AlertLog.get_recent_alert_count(hours=1)
         if recent_count >= self.max_alerts_per_hour:
-            logger.warning(f"Rate limit ({recent_count}/{self.max_alerts_per_hour}) - queuing")
-            for hm in hot_markets:
-                self._queue_market(hm)
+            logger.warning(f"Rate limit hit - queuing")
+            self.queue_events_for_digest(hot_events)
             return
         
-        for hm in hot_markets:
-            # Skip if alerted recently
-            if AlertLog.was_alerted_recently(hm.market.id, hours=6):
-                logger.info(f"Already alerted: {hm.market.id}")
+        for event in hot_events:
+            # Use event_id for dedup
+            event_id = event.cluster.event_id
+            
+            if AlertLog.was_alerted_recently(event_id, hours=6):
+                logger.info(f"Already alerted: {event_id}")
                 continue
             
-            message = self._format_urgent_alert(hm)
+            message = self._format_event_alert(event)
             success, slack_ts = self._send_to_slack(message)
             
             if success:
                 AlertLog.create(
-                    market_id=hm.market.id,
-                    market_title=hm.market.title,
-                    tier=hm.tier.value,
+                    market_id=event_id,
+                    market_title=event.cluster.title,
+                    tier=event.tier.value,
                     alert_type='real_time',
-                    signals=hm.signals,
+                    signals=event.signals.get('triggered', []),
                     slack_ts=slack_ts
                 )
-                logger.info(f"Sent alert: {hm.market.title[:50]}")
+                logger.info(f"Sent event alert: {event.cluster.title[:50]}")
             
             if AlertLog.get_recent_alert_count(hours=1) >= self.max_alerts_per_hour:
-                logger.warning("Rate limit reached")
                 break
     
-    def _queue_market(self, hm: HotMarket) -> None:
-        """Queue a market for digest with full context"""
-        # Skip if already sent in last 24h
-        if DigestQueue.was_recently_sent(hm.market.id, hours=24):
-            logger.debug(f"Already in recent digest: {hm.market.id}")
-            return
-        
-        # Ensure raw_data is a dictionary before storing
-        raw = hm.market.raw_data
-        if isinstance(raw, str):
-            try:
-                raw = json.loads(raw)
-            except:
-                raw = {}
-
-        DigestQueue.add_to_queue(
-            market_id=hm.market.id,
-            market_title=hm.market.title,
-            tier=hm.tier.value,
-            signals=hm.signals,
-            context=hm.context,
-            platform=hm.market.platform,
-            raw_data=raw 
-        )
-        logger.info(f"Queued: {hm.market.title[:50]}")
-    
-    def queue_for_digest(self, hot_markets: List[HotMarket]) -> None:
-        for hm in hot_markets:
-            self._queue_market(hm)
+    def queue_events_for_digest(self, hot_events: List[HotEvent]) -> None:
+        """Queue events for digest"""
+        for event in hot_events:
+            event_id = event.cluster.event_id
+            
+            if DigestQueue.was_recently_sent(event_id, hours=24):
+                continue
+            
+            # Store primary market data for URL generation
+            primary = event.cluster.primary_market
+            
+            DigestQueue.add_to_queue(
+                market_id=event_id,
+                market_title=event.cluster.title,
+                tier=event.tier.value,
+                signals=event.signals.get('triggered', []),
+                context={
+                    **event.context,
+                    'top_markets': [
+                        {
+                            'title': m.title,
+                            'volume': m.volume,
+                            'platform': m.platform,
+                            'odds': m.current_odds.get('yes') if m.current_odds else None
+                        }
+                        for m in event.top_markets
+                    ]
+                },
+                platform=primary.platform,
+                raw_data=primary.raw_data
+            )
+            logger.info(f"Queued event: {event.cluster.title[:50]}")
     
     def send_digest(self, digest_type: str = 'morning') -> None:
+        """Send scheduled digest"""
         urgent = DigestQueue.get_queued_markets(tier='urgent')
         daily = DigestQueue.get_queued_markets(tier='daily')
         
         if not urgent and not daily:
-            logger.info("No markets in digest queue")
+            logger.info("No events in digest queue")
             return
         
-        # Filter out any that were already alerted as real-time
+        # Filter already alerted
         urgent = [m for m in urgent if not AlertLog.was_alerted_recently(m.market_id, hours=12)]
         daily = [m for m in daily if not AlertLog.was_alerted_recently(m.market_id, hours=12)]
         
         if not urgent and not daily:
-            logger.info("All queued markets were already alerted")
+            logger.info("All queued events were already alerted")
             return
         
-        message = self._format_digest(urgent, daily, digest_type)
+        message = self._format_event_digest(urgent, daily, digest_type)
         success, _ = self._send_to_slack(message)
         
         if success:
@@ -281,95 +210,105 @@ class AlertManager:
                     market_title=m.market_title,
                     tier=m.alert_tier,
                     alert_type='digest',
-                    signals=json.loads(m.signals)
+                    signals=json.loads(m.signals) if m.signals else []
                 )
             
-            logger.info(f"Sent {digest_type} digest: {len(all_ids)} markets")
+            logger.info(f"Sent {digest_type} digest: {len(all_ids)} events")
     
     # === MESSAGE FORMATTING ===
     
-    def _format_urgent_alert(self, hm: HotMarket) -> Dict:
-        market = hm.market
-        context = hm.context
+    def _format_event_alert(self, event: HotEvent) -> Dict:
+        """Format an event-level alert"""
         
-        market_url = self._get_market_url(market=market)
-        details = self._get_market_details(market=market)
+        cluster = event.cluster
+        tier_emoji = "🔥" if event.topic_tier == 'S' else "⭐" if event.topic_tier == 'A' else "📊"
         
-        # Build signal lines
-        signal_lines = []
-        for sig in hm.signals:
-            if 'volume_spike' in sig:
-                pct = context.get('volume_spike_1h', context.get('volume_spike_6h', 0)) * 100
-                signal_lines.append(f"📈 *Volume:* +{pct:.0f}%")
-            elif 'sustained_volume' in sig:
-                pct = context.get('volume_spike_6h', 0) * 100
-                signal_lines.append(f"📈 *6h Growth:* +{pct:.0f}%")
-            elif 'odds' in sig:
-                pts = context.get('odds_movement_1h', context.get('odds_movement_6h', 0)) * 100
-                signal_lines.append(f"🎯 *Odds:* ±{abs(pts):.0f}pts")
-            elif 'new' in sig:
-                signal_lines.append(f"🆕 *New:* High-profile launch")
-            elif 'event' in sig:
-                signal_lines.append(f"📅 *Event:* Coming soon")
-            elif 'high_value_market' in sig:
-                signal_lines.append(f"💎 *Top Pick:* High Interest")
-        
-        # Title with link
-        title = f"<{market_url}|{market.title}>" if market_url else f"*{market.title}*"
-        
-        tier = context.get('topic_tier', 'B')
-        tier_emoji = "🔥" if tier == 'S' else "⭐" if tier == 'A' else "📊"
-        
+        # Header
         blocks = [
             {
                 "type": "header",
-                "text": {"type": "plain_text", "text": f"🚨 {tier}-Tier Alert", "emoji": True}
-            },
-            {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": title}
-            },
-            {
-                "type": "section",
-                "fields": [
-                    {"type": "mrkdwn", "text": f"*💰 Volume:*\n{self._format_volume(market.volume)}"},
-                    {"type": "mrkdwn", "text": f"*🎲 Odds:*\n{self._format_odds(market)}"},
-                    {"type": "mrkdwn", "text": f"*🏢 Platform:*\n{market.platform.title()}"},
-                    {"type": "mrkdwn", "text": f"*{tier_emoji} Tier:*\n{tier}"}
-                ]
+                "text": {
+                    "type": "plain_text",
+                    "text": f"🚨 HOT EVENT: {cluster.title[:50]}",
+                    "emoji": True
+                }
             }
         ]
         
-        if signal_lines:
-            blocks.append({
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": "*Why:* " + " | ".join(signal_lines)}
-            })
+        # Event summary
+        platforms = " / ".join(cluster.platform_spread).title()
+        summary_text = (
+            f"*Total Volume:* {self._format_volume(cluster.total_volume)} | "
+            f"*Markets:* {cluster.market_count} | "
+            f"*Platforms:* {platforms}"
+        )
         
-        if details.get('description'):
-            desc = details['description'][:200] + ('...' if len(details['description']) > 200 else '')
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": summary_text}
+        })
+        
+        # Signals
+        triggered = event.signals.get('triggered', [])
+        if triggered:
+            signal_parts = [f"{self._get_signal_emoji(s)} {s.replace('_', ' ').title()}" for s in triggered[:4]]
             blocks.append({
                 "type": "context",
-                "elements": [{"type": "mrkdwn", "text": f"_{desc}_"}]
+                "elements": [{"type": "mrkdwn", "text": " • ".join(signal_parts)}]
             })
         
-        if market_url:
+        blocks.append({"type": "divider"})
+        
+        # Top Markets section
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": "*📋 Top Markets:*"}
+        })
+        
+        for i, market in enumerate(event.top_markets[:3], 1):
+            url = self._get_market_url(market)
+            title = market.title[:55] + ('...' if len(market.title) > 55 else '')
+            
+            if url:
+                market_line = f"<{url}|{title}>"
+            else:
+                market_line = f"*{title}*"
+            
+            odds_str = self._format_odds(market)
+            vol_str = self._format_volume(market.volume)
+            platform_badge = f"[{market.platform.title()}]"
+            
+            info_line = f"{vol_str}"
+            if odds_str:
+                info_line += f" • {odds_str}"
+            
+            blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"  {i}. {market_line} {platform_badge}\n      {info_line}"}
+            })
+        
+        # View button for primary market
+        primary_url = self._get_market_url(cluster.primary_market)
+        if primary_url:
             blocks.append({
                 "type": "actions",
                 "elements": [{
                     "type": "button",
-                    "text": {"type": "plain_text", "text": f"View →", "emoji": True},
-                    "url": market_url,
+                    "text": {"type": "plain_text", "text": f"View on {cluster.primary_market.platform.title()} →", "emoji": True},
+                    "url": primary_url,
                     "style": "primary"
                 }]
             })
         
         blocks.append({"type": "divider"})
         
-        return {"blocks": blocks, "text": f"🚨 {tier}: {market.title}"}
+        return {
+            "blocks": blocks,
+            "text": f"🚨 HOT EVENT: {cluster.title} ({self._format_volume(cluster.total_volume)})"
+        }
     
-    def _format_digest(self, urgent: List, daily: List, digest_type: str) -> Dict:
-        """Format digest with links and full context"""
+    def _format_event_digest(self, urgent: List, daily: List, digest_type: str) -> Dict:
+        """Format event digest"""
         
         title = "☀️ MORNING DIGEST" if digest_type == 'morning' else "🌙 EVENING DIGEST"
         total = len(urgent) + len(daily)
@@ -377,16 +316,15 @@ class AlertManager:
         blocks = [
             {
                 "type": "header",
-                "text": {"type": "plain_text", "text": f"{title}", "emoji": True}
+                "text": {"type": "plain_text", "text": title, "emoji": True}
             },
             {
                 "type": "context",
-                "elements": [{"type": "mrkdwn", "text": f"📅 {datetime.now().strftime('%B %d, %Y')} • *{total}* markets"}]
+                "elements": [{"type": "mrkdwn", "text": f"📅 {datetime.now().strftime('%B %d, %Y')} • *{total}* hot events"}]
             },
             {"type": "divider"}
         ]
         
-        # Urgent markets
         if urgent:
             blocks.append({
                 "type": "section",
@@ -394,115 +332,93 @@ class AlertManager:
             })
             
             for item in urgent[:5]:
-                block = self._format_digest_item(item, show_full=True)
-                blocks.extend(block)
+                blocks.extend(self._format_digest_event_item(item, show_markets=True))
             
             blocks.append({"type": "divider"})
         
-        # Daily markets
         if daily:
             blocks.append({
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": f"*📈 OPPORTUNITIES ({len(daily)})*"}
+                "text": {"type": "mrkdwn", "text": f"*📈 TODAY'S OPPORTUNITIES ({len(daily)})*"}
             })
             
             for item in daily[:10]:
-                block = self._format_digest_item(item, show_full=False)
-                blocks.extend(block)
+                blocks.extend(self._format_digest_event_item(item, show_markets=False))
         
-        if not urgent and not daily:
-            blocks.append({
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": "No hot markets today. 😴"}
-            })
-        
-        return {"blocks": blocks, "text": f"{title} - {total} markets"}
+        return {"blocks": blocks, "text": f"{title} - {total} events"}
     
-    def _format_digest_item(self, item, show_full: bool = False) -> List[Dict]:
-        """Format a single digest item with link"""
+    def _format_digest_event_item(self, item, show_markets: bool = False) -> List[Dict]:
+        """Format a single event in digest"""
         blocks = []
         
         ctx = json.loads(item.context) if item.context else {}
         signals = json.loads(item.signals) if item.signals else []
         
-        # Robust raw_data parsing
+        # Parse raw_data for URL
         try:
-            if isinstance(item.raw_data, dict):
-                raw = item.raw_data
-            else:
-                raw = json.loads(item.raw_data) if item.raw_data else {}
+            raw = json.loads(item.raw_data) if item.raw_data else {}
         except:
             raw = {}
         
-        # Generate URL
-        url = self._get_market_url(platform=item.platform, raw_data=raw)
+        url = None
+        platform = item.platform
+        if platform == 'polymarket':
+            slug = raw.get('slug') or raw.get('condition_id')
+            if slug:
+                url = f"https://polymarket.com/event/{slug}"
+        elif platform == 'kalshi':
+            ticker = raw.get('ticker', '')
+            if ticker:
+                url = f"https://kalshi.com/markets/{ticker.lower()}"
         
-        # Title with link
-        title = item.market_title[:60]
-        if len(item.market_title) > 60:
-            title += "..."
-        
+        # Title
+        title = item.market_title[:50] + ('...' if len(item.market_title) > 50 else '')
         if url:
             title_text = f"<{url}|{title}>"
         else:
             title_text = f"*{title}*"
-            
-        # Add Platform Name explicitly
-        platform_name = f"[{item.platform.title()}]" if item.platform else ""
         
-        # Build signal summary
-        signal_parts = []
-        for sig in signals:
-            if 'volume' in sig:
-                pct = ctx.get('volume_spike_1h', ctx.get('volume_spike_6h', 0)) * 100
-                if pct > 0:
-                    signal_parts.append(f"📈+{pct:.0f}%")
-            elif 'odds' in sig:
-                signal_parts.append("🎯 Odds")
-            elif 'event' in sig:
-                signal_parts.append("📅 Soon")
-            elif 'high_value_market' in sig:
-                signal_parts.append("💎 Top Pick")
+        # Stats
+        vol = ctx.get('total_volume', 0)
+        mkt_count = ctx.get('market_count', 1)
+        platforms = ctx.get('platforms', [])
         
-        volume = ctx.get('volume', 0)
-        odds = ctx.get('odds')
+        info_parts = [self._format_volume(vol)]
+        if mkt_count > 1:
+            info_parts.append(f"{mkt_count} markets")
+        if len(platforms) > 1:
+            info_parts.append("Multi-platform")
         
-        # Format line
-        info_parts = [self._format_volume(volume)]
-        if odds:
-            info_parts.append(self._format_odds_from_context(ctx))
-        if signal_parts:
-            info_parts.append(" ".join(signal_parts[:2]))
+        # Signal emoji
+        signal_emoji = ""
+        for s in signals[:2]:
+            signal_emoji += self._get_signal_emoji(s)
         
-        info_line = " • ".join(info_parts)
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"• {title_text} {signal_emoji}\n   {' • '.join(info_parts)}"}
+        })
         
-        if show_full:
-            # Two-line format for urgent
-            blocks.append({
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": f"• {title_text} {platform_name}\n   {info_line}"}
-            })
-            
-            # Add description if available
-            details = self._get_market_details(platform=item.platform, raw_data=raw)
-            if details.get('description') and show_full:
-                desc = details['description'][:150]
+        # Show top markets if requested
+        if show_markets:
+            top_markets = ctx.get('top_markets', [])[:3]
+            if top_markets:
+                market_lines = []
+                for m in top_markets:
+                    m_title = m['title'][:40] + ('...' if len(m['title']) > 40 else '')
+                    m_vol = self._format_volume(m['volume'])
+                    market_lines.append(f"   └ {m_title} ({m_vol})")
+                
                 blocks.append({
                     "type": "context",
-                    "elements": [{"type": "mrkdwn", "text": f"   _{desc}_"}]
+                    "elements": [{"type": "mrkdwn", "text": "\n".join(market_lines)}]
                 })
-        else:
-            # Single line for daily
-            blocks.append({
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": f"• {title_text} {platform_name} — {info_line}"}
-            })
         
         return blocks
     
     def _send_to_slack(self, message: Dict) -> tuple[bool, Optional[str]]:
         if not self.slack_webhook_url:
-            logger.info(f"[DRY RUN] {json.dumps(message, indent=2)}")
+            logger.info(f"[DRY RUN] Would send: {message.get('text', '')[:100]}")
             return False, None
         
         try:
