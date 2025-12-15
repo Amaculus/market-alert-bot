@@ -171,46 +171,47 @@ class RelevanceChecker:
         return results
 
     def _check_static_rules(self, title: str) -> Optional[Dict]:
-        """Checks DB Cache, Blacklist, and Whitelist. Returns None if AI is needed."""
-        
-        # 1. DB Cache
-        try:
-            cached = TopicCache.get(title)
-            if cached:
-                return {
-                    'is_relevant': cached.is_relevant,
-                    'tier': cached.tier,
-                    'reasoning': f"[CACHED] {cached.reasoning}",
-                    'topic': self._extract_topic(title)
-                }
-        except Exception:
-            pass
+            """Checks DB Cache, Blacklist, and Whitelist. Returns None if AI is needed."""
+            
+            # 1. DB Cache
+            try:
+                cached = TopicCache.get(title)
+                if cached:
+                    return {
+                        'is_relevant': cached.is_relevant,
+                        'tier': cached.tier,
+                        'reasoning': f"[CACHED] {cached.reasoning}",
+                        'topic': self._extract_topic(title)
+                    }
+            except Exception as e:
+                logger.error(f"DB Cache Read Error: {e}")
+                pass
 
-        title_lower = title.lower()
-        topic = self._extract_topic(title)
+            title_lower = title.lower()
+            topic = self._extract_topic(title)
 
-        # 2. Blacklist (Hard Pass)
-        for pattern in self.BLACKLIST_KEYWORDS:
-            if re.search(pattern, title_lower):
-                return self._cache_and_return(title, {
-                    'is_relevant': False,
-                    'tier': 'C',
-                    'reasoning': f"[BLACKLIST] Matched '{pattern}'",
-                    'topic': topic
-                })
-
-        # 3. Whitelist (Fast Pass)
-        for category, data in self.RELEVANCE_CATEGORIES.items():
-            for pattern in data['keywords']:
-                if re.search(pattern, title_lower, re.IGNORECASE):
+            # 2. Blacklist (Hard Pass)
+            for pattern in self.BLACKLIST_KEYWORDS:
+                if re.search(pattern, title_lower):
                     return self._cache_and_return(title, {
-                        'is_relevant': True,
-                        'tier': data['tier'],
-                        'reasoning': f"[WHITELIST] Matched {category} keyword '{pattern}'",
+                        'is_relevant': False,
+                        'tier': 'C',
+                        'reasoning': f"[BLACKLIST] Matched '{pattern}'",
                         'topic': topic
                     })
-        
-        return None
+
+            # 3. Whitelist (Fast Pass)
+            for category, data in self.RELEVANCE_CATEGORIES.items():
+                for pattern in data['keywords']:
+                    if re.search(pattern, title_lower, re.IGNORECASE):
+                        return self._cache_and_return(title, {
+                            'is_relevant': True,
+                            'tier': data['tier'],
+                            'reasoning': f"[WHITELIST] Matched {category} keyword '{pattern}'",
+                            'topic': topic
+                        })
+            
+            return None
 
     def _check_with_ai_throttled(self, title: str) -> Dict:
         """Wrapper for AI call that enforces rate limits."""

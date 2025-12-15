@@ -5,6 +5,7 @@ Stores market snapshots and alert logs using SQLAlchemy.
 """
 
 import os
+import hashlib  # <--- ADD THIS IMPORT
 from datetime import datetime, timedelta
 from typing import List, Optional
 from sqlalchemy import create_engine, Column, String, Float, DateTime, Integer, Text, Boolean
@@ -323,11 +324,19 @@ if __name__ == "__main__":
     init_db()
     print("Database tables created successfully")
 
+import os
+import hashlib  # <--- ADD THIS IMPORT
+from datetime import datetime, timedelta
+# ... (rest of imports: typing, sqlalchemy etc) ...
+
+# ... (Keep existing code for MarketSnapshot, AlertLog, DigestQueue) ...
+
 class TopicCache(Base):
     """Caches AI relevance checks to save API costs"""
     __tablename__ = 'topic_cache'
     
-    topic_hash = Column(String(255), primary_key=True) # Use title as key
+    # We will store the SHA256 hash of the title here to fit in String(255)
+    topic_hash = Column(String(255), primary_key=True) 
     is_relevant = Column(Boolean)
     tier = Column(String(10))
     reasoning = Column(Text)
@@ -335,18 +344,24 @@ class TopicCache(Base):
 
     @classmethod
     def get(cls, title: str):
+        # Generate hash key from title
+        key = hashlib.sha256(title.encode('utf-8', errors='ignore')).hexdigest()
+        
         session = SessionLocal()
         try:
-            return session.query(cls).filter(cls.topic_hash == title).first()
+            return session.query(cls).filter(cls.topic_hash == key).first()
         finally:
             session.close()
 
     @classmethod
     def set(cls, title: str, data: dict):
+        # Generate hash key from title
+        key = hashlib.sha256(title.encode('utf-8', errors='ignore')).hexdigest()
+        
         session = SessionLocal()
         try:
             cache = cls(
-                topic_hash=title,
+                topic_hash=key,  # Store the hash, not the full title
                 is_relevant=data['is_relevant'],
                 tier=data['tier'],
                 reasoning=data['reasoning']
