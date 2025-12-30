@@ -34,10 +34,10 @@ class MarketSnapshot(Base):
     id = Column(Integer, primary_key=True)
     market_id = Column(String(255), nullable=False, index=True)
     platform = Column(String(50), nullable=False)
-    title = Column(Text, nullable=False)
+    title = Column(String(500), nullable=False)  # Changed from Text to VARCHAR(500) - saves space
     category = Column(String(100))
     series_ticker = Column(String(100))
-    
+
     # Market data
     volume = Column(Float, default=0.0)
     yes_odds = Column(Float)

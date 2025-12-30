@@ -40,7 +40,7 @@ class KalshiClient:
     def get_all_markets(
         self,
         status: str = "open",
-        limit: int = 10000
+        limit: int = 50000
     ) -> List[Market]:
         """Fetch all markets from Kalshi"""
         markets = []
