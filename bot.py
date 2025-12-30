@@ -317,8 +317,13 @@ def main():
     logger.info("="*60)
     logger.info(f"Environment: {os.getenv('RAILWAY_ENVIRONMENT', 'development')}")
     logger.info(f"Slack configured: {bool(os.getenv('SLACK_WEBHOOK_URL'))}")
-    
+
     monitor = MarketMonitor()
+
+    # CRITICAL: Run cleanup immediately on startup to clear existing database bloat
+    logger.info("Running STARTUP database cleanup to free space...")
+    monitor.cleanup_database()
+    logger.info("Startup cleanup complete - database freed")
     
     check_interval = monitor.check_interval_minutes
     
