@@ -49,6 +49,11 @@ class MarketSnapshot(Base):
     
     # Timestamp
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        # Composite index for faster history queries
+        # Index('ix_market_snapshots_market_created', 'market_id', 'created_at'),
+    )
     
     @classmethod
     def create_from_market(cls, market):
@@ -132,6 +137,23 @@ class MarketSnapshot(Base):
         finally:
             session.close()
 
+    @classmethod
+    def cleanup_old_snapshots(cls, days: int = 7) -> int:
+        """Delete snapshots older than N days to prevent database bloat"""
+        session = SessionLocal()
+        try:
+            cutoff = datetime.utcnow() - timedelta(days=days)
+            deleted = session.query(cls)\
+                .filter(cls.created_at < cutoff)\
+                .delete(synchronize_session=False)
+            session.commit()
+            return deleted
+        except Exception as e:
+            session.rollback()
+            raise e
+        finally:
+            session.close()
+
 
 class AlertLog(Base):
     """Logs all alerts sent"""
@@ -200,6 +222,23 @@ class AlertLog(Base):
                 .filter(cls.alert_type == 'real_time')\
                 .count()
             return count
+        finally:
+            session.close()
+
+    @classmethod
+    def cleanup_old_logs(cls, days: int = 30) -> int:
+        """Delete alert logs older than N days"""
+        session = SessionLocal()
+        try:
+            cutoff = datetime.utcnow() - timedelta(days=days)
+            deleted = session.query(cls)\
+                .filter(cls.sent_at < cutoff)\
+                .delete(synchronize_session=False)
+            session.commit()
+            return deleted
+        except Exception as e:
+            session.rollback()
+            raise e
         finally:
             session.close()
 
@@ -307,6 +346,24 @@ class DigestQueue(Base):
                     'digest_sent_at': datetime.utcnow()
                 }, synchronize_session=False)
             session.commit()
+        except Exception as e:
+            session.rollback()
+            raise e
+        finally:
+            session.close()
+
+    @classmethod
+    def cleanup_old_sent_items(cls, days: int = 7) -> int:
+        """Delete digest items that were sent more than N days ago"""
+        session = SessionLocal()
+        try:
+            cutoff = datetime.utcnow() - timedelta(days=days)
+            deleted = session.query(cls)\
+                .filter(cls.included_in_digest == True)\
+                .filter(cls.digest_sent_at < cutoff)\
+                .delete(synchronize_session=False)
+            session.commit()
+            return deleted
         except Exception as e:
             session.rollback()
             raise e

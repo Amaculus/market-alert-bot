@@ -256,21 +256,21 @@ class MarketMonitor:
     
     def _process_alerts(self, hot_events: List[HotEvent]) -> None:
         """Process and send alerts"""
-        
-        # Store snapshots for top markets in each event
-        for event in hot_events:
-            for market in event.top_markets:
-                try:
-                    MarketSnapshot.create_from_market(market)
-                except Exception as e:
-                    logger.debug(f"Snapshot error: {e}")
-        
+
+        # Only create snapshots for URGENT events (reduce DB writes by ~80%)
         urgent = [e for e in hot_events if e.tier == AlertTier.URGENT]
         daily = [e for e in hot_events if e.tier == AlertTier.DAILY]
-        
+
+        # Snapshot only the primary market of urgent events
+        for event in urgent:
+            try:
+                MarketSnapshot.create_from_market(event.cluster.primary_market)
+            except Exception as e:
+                logger.debug(f"Snapshot error: {e}")
+
         if urgent:
             self.alert_manager.send_urgent_event_alerts(urgent)
-        
+
         if daily:
             self.alert_manager.queue_events_for_digest(daily)
     
@@ -287,6 +287,28 @@ class MarketMonitor:
             self.alert_manager.send_digest(digest_type='evening')
         except Exception as e:
             logger.error(f"Error sending evening digest: {e}", exc_info=True)
+
+    def cleanup_database(self) -> None:
+        """Daily database cleanup to prevent bloat"""
+        try:
+            logger.info("Running database cleanup...")
+
+            # Delete old snapshots (keep 7 days)
+            snapshot_deleted = MarketSnapshot.cleanup_old_snapshots(days=7)
+            logger.info(f"Deleted {snapshot_deleted} old snapshots")
+
+            # Delete old alert logs (keep 30 days)
+            from models import AlertLog, DigestQueue
+            alerts_deleted = AlertLog.cleanup_old_logs(days=30)
+            logger.info(f"Deleted {alerts_deleted} old alert logs")
+
+            # Delete sent digest items (keep 7 days)
+            digest_deleted = DigestQueue.cleanup_old_sent_items(days=7)
+            logger.info(f"Deleted {digest_deleted} old digest items")
+
+            logger.info("Database cleanup complete")
+        except Exception as e:
+            logger.error(f"Error during database cleanup: {e}", exc_info=True)
 
 
 def main():
@@ -305,12 +327,16 @@ def main():
     
     morning_time = os.getenv('MORNING_DIGEST_TIME', '09:00')
     evening_time = os.getenv('EVENING_DIGEST_TIME', '17:00')
-    
+    cleanup_time = os.getenv('CLEANUP_TIME', '03:00')
+
     logger.info(f"Morning digest at {morning_time}")
     schedule.every().day.at(morning_time).do(monitor.send_morning_digest)
-    
+
     logger.info(f"Evening digest at {evening_time}")
     schedule.every().day.at(evening_time).do(monitor.send_evening_digest)
+
+    logger.info(f"Database cleanup at {cleanup_time}")
+    schedule.every().day.at(cleanup_time).do(monitor.cleanup_database)
     
     # Initial check in background
     logger.info("Running initial check...")

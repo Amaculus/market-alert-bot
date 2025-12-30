@@ -38,9 +38,9 @@ class KalshiClient:
             print(f"Kalshi Login Failed: {e}", flush=True)
     
     def get_all_markets(
-        self, 
+        self,
         status: str = "open",
-        limit: int = 50000
+        limit: int = 5000
     ) -> List[Market]:
         """Fetch all markets from Kalshi"""
         markets = []
@@ -197,16 +197,16 @@ class PolymarketClient:
     def get_all_markets(
         self,
         active: bool = True,
-        limit: int = 50000
+        limit: int = 5000
     ) -> List[Market]:
         """Fetch all markets from Polymarket using parallel pagination"""
-        
+
         print(f"Fetching Polymarket markets (limit: {limit}) using parallel pages...", flush=True)
-        
+
         all_markets = []
-        initial_pages = 20 
+        initial_pages = 10
         offsets_to_fetch = [i * self.PAGE_SIZE for i in range(initial_pages)]
-        max_workers = 10 
+        max_workers = 3 
         
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_offset = {executor.submit(self._fetch_page, offset, active): offset for offset in offsets_to_fetch}
