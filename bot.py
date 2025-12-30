@@ -69,8 +69,8 @@ class MarketMonitor:
             logger.info("Starting Event-First market check...")
             start_time = time.time()
             
-            # 1. Fetch all markets
-            all_markets = self.aggregator.fetch_all_markets()
+            # 1. Fetch all markets (Polymarket filtered by volume at API level)
+            all_markets = self.aggregator.fetch_all_markets(min_volume=self.absolute_min_volume)
             
             # 2. Filter by minimum volume
             viable_markets = [m for m in all_markets if m.volume >= self.absolute_min_volume]

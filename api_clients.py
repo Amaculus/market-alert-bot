@@ -40,7 +40,7 @@ class KalshiClient:
     def get_all_markets(
         self,
         status: str = "open",
-        limit: int = 5000
+        limit: int = 10000
     ) -> List[Market]:
         """Fetch all markets from Kalshi"""
         markets = []
@@ -161,13 +161,17 @@ class PolymarketClient:
     def __init__(self):
         self.session = requests.Session()
 
-    def _fetch_page(self, offset: int, active: bool) -> List[Market]:
+    def _fetch_page(self, offset: int, active: bool, min_volume: float = None) -> List[Market]:
         """Fetches a single page of markets from Polymarket"""
         params = {
             "limit": self.PAGE_SIZE,
             "offset": offset,
             "archived": "false" if active else "true"
         }
+
+        # Add volume filter if specified
+        if min_volume is not None:
+            params["volume_num_min"] = min_volume
         
         for attempt in range(3):
             try:
@@ -197,19 +201,21 @@ class PolymarketClient:
     def get_all_markets(
         self,
         active: bool = True,
-        limit: int = 5000
+        limit: int = 10000,
+        min_volume: float = None
     ) -> List[Market]:
         """Fetch all markets from Polymarket using parallel pagination"""
 
-        print(f"Fetching Polymarket markets (limit: {limit}) using parallel pages...", flush=True)
+        volume_msg = f" (min volume: ${min_volume:,.0f})" if min_volume else ""
+        print(f"Fetching Polymarket markets (limit: {limit}){volume_msg} using parallel pages...", flush=True)
 
         all_markets = []
-        initial_pages = 10
+        initial_pages = 15
         offsets_to_fetch = [i * self.PAGE_SIZE for i in range(initial_pages)]
-        max_workers = 3 
-        
+        max_workers = 3
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_offset = {executor.submit(self._fetch_page, offset, active): offset for offset in offsets_to_fetch}
+            future_to_offset = {executor.submit(self._fetch_page, offset, active, min_volume): offset for offset in offsets_to_fetch}
             
             current_offset = initial_pages * self.PAGE_SIZE
             last_page_found = False
@@ -233,8 +239,8 @@ class PolymarketClient:
                         if not last_page_found and len(all_markets) < limit:
                             next_offset = current_offset
                             current_offset += self.PAGE_SIZE
-                            
-                            next_future = executor.submit(self._fetch_page, next_offset, active)
+
+                            next_future = executor.submit(self._fetch_page, next_offset, active, min_volume)
                             future_to_offset[next_future] = next_offset
                             
                     except Exception as e:
@@ -319,22 +325,24 @@ class MarketAggregator:
         include_kalshi: bool = True,
         include_polymarket: bool = True,
         kalshi_status: str = "open",
-        polymarket_active: bool = True
+        polymarket_active: bool = True,
+        min_volume: float = None
     ) -> List[Market]:
         """Fetch markets from all enabled platforms IN PARALLEL"""
         all_markets = []
-        
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             futures = {}
-            
+
             if include_kalshi:
                 print("Starting Kalshi fetch...", flush=True)
                 future_k = executor.submit(self.kalshi.get_all_markets, status=kalshi_status)
                 futures[future_k] = "Kalshi"
-                
+
             if include_polymarket:
                 print("Starting Polymarket fetch...", flush=True)
-                future_p = executor.submit(self.polymarket.get_all_markets, active=polymarket_active)
+                # Polymarket supports volume filtering at API level
+                future_p = executor.submit(self.polymarket.get_all_markets, active=polymarket_active, min_volume=min_volume)
                 futures[future_p] = "Polymarket"
             
             for future in concurrent.futures.as_completed(futures):
