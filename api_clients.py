@@ -255,11 +255,15 @@ class PolymarketClient:
     def _parse_market(self, data: Dict) -> Optional[Market]:
         if not data.get("question"):
             return None
-        
+
         event_date = None
         if data.get("end_date_iso"):
             try:
                 event_date = datetime.fromisoformat(data["end_date_iso"].replace("Z", "+00:00"))
+                # Skip markets that have already ended
+                from datetime import timezone
+                if event_date < datetime.now(timezone.utc):
+                    return None
             except: pass
         
         current_odds = {}
