@@ -96,7 +96,8 @@ class KalshiClient:
                 
             for market_data in batch:
                 market = self._parse_market(market_data)
-                markets.append(market)
+                if market:  # Skip None (filtered markets)
+                    markets.append(market)
             
             if len(markets) % 1000 == 0:
                 print(f"  Fetched {len(markets)} Kalshi markets so far...", flush=True)
@@ -110,7 +111,20 @@ class KalshiClient:
         print(f"Fetched {len(markets)} markets from Kalshi", flush=True)
         return markets
     
-    def _parse_market(self, data: Dict) -> Market:
+    def _parse_market(self, data: Dict) -> Optional[Market]:
+        # Filter out markets about past years
+        import re
+        from datetime import timezone
+        title = data.get("title", "")
+        current_year = datetime.now(timezone.utc).year
+
+        # Find all 4-digit years in the title
+        years_mentioned = re.findall(r'\b(20\d{2})\b', title)
+        for year_str in years_mentioned:
+            year = int(year_str)
+            if year < current_year:
+                return None  # Skip markets about past years
+
         event_date = None
         if data.get("expiration_time"):
             try:
@@ -256,12 +270,24 @@ class PolymarketClient:
         if not data.get("question"):
             return None
 
+        # Filter out markets about past years (2024 or earlier when we're in 2026)
+        import re
+        from datetime import timezone
+        question = data.get("question", "")
+        current_year = datetime.now(timezone.utc).year
+
+        # Find all 4-digit years in the title
+        years_mentioned = re.findall(r'\b(20\d{2})\b', question)
+        for year_str in years_mentioned:
+            year = int(year_str)
+            if year < current_year:
+                return None  # Skip markets about past years
+
         event_date = None
         if data.get("end_date_iso"):
             try:
                 event_date = datetime.fromisoformat(data["end_date_iso"].replace("Z", "+00:00"))
                 # Skip markets that have already ended
-                from datetime import timezone
                 if event_date < datetime.now(timezone.utc):
                     return None
             except: pass
