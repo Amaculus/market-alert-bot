@@ -151,8 +151,11 @@ class AlertManager:
         """Queue events for digest"""
         for event in hot_events:
             event_id = event.cluster.event_id
-            
+
+            # Skip if recently sent in digest OR recently alerted
             if DigestQueue.was_recently_sent(event_id, hours=24):
+                continue
+            if AlertLog.was_alerted_recently(event_id, hours=24):
                 continue
             
             # Store primary market data for URL generation
@@ -189,9 +192,9 @@ class AlertManager:
             logger.info("No events in digest queue")
             return
         
-        # Filter already alerted
-        urgent = [m for m in urgent if not AlertLog.was_alerted_recently(m.market_id, hours=12)]
-        daily = [m for m in daily if not AlertLog.was_alerted_recently(m.market_id, hours=12)]
+        # Filter already alerted (24 hours to prevent same markets in consecutive digests)
+        urgent = [m for m in urgent if not AlertLog.was_alerted_recently(m.market_id, hours=24)]
+        daily = [m for m in daily if not AlertLog.was_alerted_recently(m.market_id, hours=24)]
         
         if not urgent and not daily:
             logger.info("All queued events were already alerted")
@@ -359,13 +362,26 @@ class AlertManager:
             raw = json.loads(item.raw_data) if item.raw_data else {}
         except:
             raw = {}
-        
+
+        # Log if raw_data is missing
+        if not raw:
+            logger.warning(f"No raw_data for market: {item.market_title[:50]} - links will be broken")
+
         url = None
         platform = item.platform
         if platform == 'polymarket':
-            slug = raw.get('slug') or raw.get('condition_id')
+            # Try multiple URL patterns for Polymarket
+            slug = raw.get('slug')
+            condition_id = raw.get('condition_id')
+
             if slug:
+                # Primary: use slug with /event/ path
                 url = f"https://polymarket.com/event/{slug}"
+            elif condition_id:
+                # Fallback: use condition_id
+                url = f"https://polymarket.com/event/{condition_id}"
+            else:
+                logger.warning(f"No slug or condition_id for Polymarket market: {item.market_title[:50]}")
         elif platform == 'kalshi':
             ticker = raw.get('ticker', '')
             if ticker:
