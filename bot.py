@@ -324,6 +324,21 @@ def main():
     logger.info("Running STARTUP database cleanup to free space...")
     monitor.cleanup_database()
     logger.info("Startup cleanup complete - database freed")
+
+    # CLEAR OLD DIGEST QUEUE: Prevent sending stale/closed markets from before crash
+    logger.info("Clearing stale digest queue items...")
+    from models import DigestQueue, SessionLocal
+    session = SessionLocal()
+    try:
+        # Delete ALL queued items (they're likely stale from before the crash)
+        deleted = session.query(DigestQueue).filter(DigestQueue.included_in_digest == False).delete()
+        session.commit()
+        logger.info(f"Cleared {deleted} stale digest queue items")
+    except Exception as e:
+        logger.error(f"Error clearing digest queue: {e}")
+        session.rollback()
+    finally:
+        session.close()
     
     check_interval = monitor.check_interval_minutes
     
