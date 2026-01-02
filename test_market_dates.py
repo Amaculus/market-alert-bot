@@ -41,7 +41,7 @@ def test_polymarket_dates():
         markets_2024 = [m for m in markets if "2024" in m.get("question", "")]
 
         if markets_2024:
-            print(f"⚠️  FOUND {len(markets_2024)} MARKETS WITH '2024' IN TITLE:\n")
+            print(f"[WARNING]  FOUND {len(markets_2024)} MARKETS WITH '2024' IN TITLE:\n")
 
             for market in markets_2024[:5]:  # Show first 5
                 print("-" * 80)
@@ -50,36 +50,48 @@ def test_polymarket_dates():
                 print(f"Closed: {market.get('closed')}")
                 print(f"Archived: {market.get('archived')}")
 
-                # Date fields
-                end_date = market.get('end_date_iso')
-                close_time = market.get('close_time')
-                start_date = market.get('start_date_iso')
+                # ALL Polymarket date fields
+                date_fields = {
+                    'startDate': market.get('startDate'),
+                    'endDate': market.get('endDate'),
+                    'startDateIso': market.get('startDateIso'),
+                    'endDateIso': market.get('endDateIso'),
+                    'umaEndDate': market.get('umaEndDate'),
+                    'umaEndDateIso': market.get('umaEndDateIso'),
+                    'closedTime': market.get('closedTime'),
+                    'gameStartTime': market.get('gameStartTime'),
+                    'eventStartTime': market.get('eventStartTime'),
+                }
 
-                print(f"\nDATE FIELDS:")
-                print(f"  end_date_iso: {end_date}")
-                print(f"  start_date_iso: {start_date}")
-                print(f"  close_time: {close_time}")
+                print(f"\nALL DATE FIELDS:")
+                now = datetime.now(timezone.utc)
 
-                # Parse and check dates
-                if end_date:
-                    try:
-                        end_dt = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
-                        now = datetime.now(timezone.utc)
-                        is_past = end_dt < now
-                        print(f"  → End date parsed: {end_dt}")
-                        print(f"  → Is in the past? {is_past}")
-                        print(f"  → Days until/since end: {(end_dt - now).days}")
-                    except Exception as e:
-                        print(f"  → Error parsing end_date: {e}")
+                for field_name, field_value in date_fields.items():
+                    if field_value:
+                        print(f"\n  {field_name}: {field_value}")
+                        # Try to parse
+                        try:
+                            if isinstance(field_value, str):
+                                dt = datetime.fromisoformat(field_value.replace("Z", "+00:00"))
+                            else:
+                                # Might be a timestamp
+                                dt = datetime.fromtimestamp(field_value, tz=timezone.utc)
+
+                            is_past = dt < now
+                            days_diff = (dt - now).days
+                            print(f"    → Parsed: {dt}")
+                            print(f"    → Is PAST? {is_past}")
+                            print(f"    → Days until/since: {days_diff}")
+                        except Exception as e:
+                            print(f"    → Could not parse: {e}")
+                    else:
+                        print(f"  {field_name}: None")
 
                 # Volume info
                 print(f"\nVOLUME: ${market.get('volume', 0):,.0f}")
-
-                # All available fields
-                print(f"\nALL FIELDS: {list(market.keys())}")
                 print()
         else:
-            print("✅ No markets with '2024' in title found in first 20\n")
+            print("[OK] No markets with '2024' in title found in first 20\n")
 
         # Show a few sample markets regardless
         print("\n" + "-"*80)
@@ -90,7 +102,7 @@ def test_polymarket_dates():
             print(f"   Volume: ${market.get('volume', 0):,.0f}\n")
 
     except Exception as e:
-        print(f"❌ Error fetching Polymarket: {e}")
+        print(f"[ERROR] Error fetching Polymarket: {e}")
 
 
 def test_kalshi_dates():
@@ -116,9 +128,9 @@ def test_kalshi_dates():
             token = resp.json().get("token")
             if token:
                 headers["Authorization"] = f"Bearer {token}"
-                print("✅ Authenticated with Kalshi\n")
+                print("[OK] Authenticated with Kalshi\n")
         except Exception as e:
-            print(f"⚠️  Could not authenticate: {e}\n")
+            print(f"[WARNING]  Could not authenticate: {e}\n")
 
     # Fetch markets
     url = f"{base_url}/markets"
@@ -139,34 +151,50 @@ def test_kalshi_dates():
         markets_2024 = [m for m in markets if "2024" in m.get("title", "")]
 
         if markets_2024:
-            print(f"⚠️  FOUND {len(markets_2024)} MARKETS WITH '2024' IN TITLE:\n")
+            print(f"[WARNING]  FOUND {len(markets_2024)} MARKETS WITH '2024' IN TITLE:\n")
 
             for market in markets_2024[:5]:
                 print("-" * 80)
                 print(f"Title: {market.get('title', 'N/A')[:100]}")
                 print(f"Status: {market.get('status')}")
-                print(f"Open: {market.get('open_time')}")
-                print(f"Close: {market.get('close_time')}")
-                print(f"Expiration: {market.get('expiration_time')}")
 
-                # Parse expiration time
-                exp_time = market.get('expiration_time')
-                if exp_time:
-                    try:
-                        exp_dt = datetime.fromisoformat(exp_time.replace("Z", "+00:00"))
-                        now = datetime.now(timezone.utc)
-                        is_past = exp_dt < now
-                        print(f"  → Expiration parsed: {exp_dt}")
-                        print(f"  → Is in the past? {is_past}")
-                        print(f"  → Days until/since expiration: {(exp_dt - now).days}")
-                    except Exception as e:
-                        print(f"  → Error parsing expiration: {e}")
+                # ALL Kalshi date fields
+                date_fields = {
+                    'close_time': market.get('close_time'),
+                    'expiration_time': market.get('expiration_time'),
+                    'latest_expiration_time': market.get('latest_expiration_time'),
+                    'settlement_ts': market.get('settlement_ts'),
+                    'expected_expiration_time': market.get('expected_expiration_time'),
+                }
 
-                print(f"\nVolume: ${market.get('volume', 0):,.0f}")
-                print(f"ALL FIELDS: {list(market.keys())}")
+                print(f"\nALL DATE FIELDS:")
+                now = datetime.now(timezone.utc)
+
+                for field_name, field_value in date_fields.items():
+                    if field_value:
+                        print(f"\n  {field_name}: {field_value}")
+                        # Try to parse
+                        try:
+                            if isinstance(field_value, str):
+                                dt = datetime.fromisoformat(field_value.replace("Z", "+00:00"))
+                            else:
+                                # Might be a timestamp
+                                dt = datetime.fromtimestamp(field_value, tz=timezone.utc)
+
+                            is_past = dt < now
+                            days_diff = (dt - now).days
+                            print(f"    → Parsed: {dt}")
+                            print(f"    → Is PAST? {is_past}")
+                            print(f"    → Days until/since: {days_diff}")
+                        except Exception as e:
+                            print(f"    → Could not parse: {e}")
+                    else:
+                        print(f"  {field_name}: None")
+
+                print(f"\nVOLUME: ${market.get('volume', 0):,.0f}")
                 print()
         else:
-            print("✅ No markets with '2024' in title found\n")
+            print("[OK] No markets with '2024' in title found\n")
 
         # Show sample markets
         print("\n" + "-"*80)
@@ -177,15 +205,52 @@ def test_kalshi_dates():
             print(f"   Volume: ${market.get('volume', 0):,.0f}\n")
 
     except Exception as e:
-        print(f"❌ Error fetching Kalshi: {e}")
+        print(f"[ERROR] Error fetching Kalshi: {e}")
+
+
+def test_api_filtering():
+    """Test if we can filter markets at API level using date parameters"""
+    print("\n" + "="*80)
+    print("TESTING API-LEVEL DATE FILTERING")
+    print("="*80 + "\n")
+
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+
+    # Test Polymarket with end_date_min filter
+    print("Testing Polymarket with end_date_min (only future markets):")
+    url = "https://gamma-api.polymarket.com/markets"
+    params = {
+        "limit": 20,
+        "end_date_min": now_iso,  # Only markets ending in the future
+        "archived": "false"
+    }
+
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        markets = response.json()
+        print(f"  [OK] Got {len(markets)} markets with end_date_min={now_iso[:10]}")
+
+        # Check if any have 2024 in title
+        markets_2024 = [m for m in markets if "2024" in m.get("question", "")]
+        if markets_2024:
+            print(f"  [WARNING]  Still found {len(markets_2024)} markets with '2024' in title!")
+        else:
+            print(f"  [OK] No 2024 markets found when using end_date_min filter")
+    except Exception as e:
+        print(f"  [ERROR] Error: {e}")
+
+    print()
 
 
 if __name__ == "__main__":
-    print("\n🔍 TESTING MARKET DATE FIELDS FROM BOTH APIs")
+    print("\n*** TESTING MARKET DATE FIELDS FROM BOTH APIs ***")
     print("This will show why 2024 markets might still appear as 'active'\n")
 
     test_polymarket_dates()
     test_kalshi_dates()
+    test_api_filtering()
 
     print("\n" + "="*80)
     print("ANALYSIS COMPLETE")
@@ -194,4 +259,5 @@ if __name__ == "__main__":
     print("  • Markets with '2024' in title that have active=true")
     print("  • Date fields that are in the future despite being about past events")
     print("  • Missing or null date fields")
+    print("  • Whether API-level filtering works to exclude past markets")
     print()

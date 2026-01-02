@@ -177,6 +177,7 @@ class PolymarketClient:
 
     def _fetch_page(self, offset: int, active: bool, min_volume: float = None) -> List[Market]:
         """Fetches a single page of markets from Polymarket"""
+        from datetime import timezone
         params = {
             "limit": self.PAGE_SIZE,
             "offset": offset,
@@ -186,6 +187,11 @@ class PolymarketClient:
         # Add volume filter if specified
         if min_volume is not None:
             params["volume_num_min"] = min_volume
+
+        # Filter out markets that have already ended (API-level filtering)
+        if active:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            params["end_date_min"] = now_iso
         
         for attempt in range(3):
             try:
