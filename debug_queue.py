@@ -5,6 +5,10 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Load environment variables from .env
+from dotenv import load_dotenv
+load_dotenv()
+
 from models import DigestQueue, AlertLog, SessionLocal
 
 def inspect_queue():

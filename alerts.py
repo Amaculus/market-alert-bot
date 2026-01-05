@@ -56,8 +56,8 @@ class AlertManager:
 
     def _slugify_kalshi_title(self, title: str) -> str:
         slug = title.strip().lower()
-        slug = re.sub(r"[^a-z0-9\\s-]", "", slug)
-        slug = re.sub(r"[\\s_-]+", "-", slug)
+        slug = re.sub(r"[^a-z0-9\s-]", "", slug)
+        slug = re.sub(r"[\s_-]+", "-", slug)
         return slug.strip("-")
 
     def _get_kalshi_event(self, event_ticker: str) -> Optional[Dict]:
@@ -229,7 +229,12 @@ class AlertManager:
             
             # Store primary market data for URL generation
             primary = event.cluster.primary_market
-            
+
+            # Enrich raw_data with series_ticker for Kalshi markets
+            raw_data = primary.raw_data.copy() if primary.raw_data else {}
+            if primary.platform == 'kalshi' and primary.series_ticker:
+                raw_data['series_ticker'] = primary.series_ticker
+
             DigestQueue.add_to_queue(
                 market_id=event_id,
                 market_title=event.cluster.title,
@@ -248,7 +253,7 @@ class AlertManager:
                     ]
                 },
                 platform=primary.platform,
-                raw_data=primary.raw_data
+                raw_data=raw_data
             )
             logger.info(f"Queued event: {event.cluster.title[:50]}")
     
