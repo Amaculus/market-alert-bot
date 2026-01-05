@@ -8,6 +8,7 @@ with top constituent markets listed.
 import os
 import json
 import requests
+import re
 from enum import Enum
 from typing import List, Dict, Optional
 from dataclasses import dataclass
@@ -39,16 +40,86 @@ class HotEvent:
 
 
 class AlertManager:
+    KALSHI_API_BASE = "https://api.elections.kalshi.com/trade-api/v2"
     
     def __init__(self):
         self.slack_webhook_url = os.getenv('SLACK_WEBHOOK_URL')
         self.max_alerts_per_hour = int(os.getenv('MAX_ALERTS_PER_HOUR', '5'))
         self.business_hours_only = os.getenv('BUSINESS_HOURS_ONLY', 'false').lower() == 'true'
+        self._kalshi_event_cache = {}
+        self._kalshi_series_title_cache = {}
         
         if not self.slack_webhook_url:
             logger.warning("SLACK_WEBHOOK_URL not set - alerts logged only")
     
     # === URL HELPERS ===
+
+    def _slugify_kalshi_title(self, title: str) -> str:
+        slug = title.strip().lower()
+        slug = re.sub(r"[^a-z0-9\\s-]", "", slug)
+        slug = re.sub(r"[\\s_-]+", "-", slug)
+        return slug.strip("-")
+
+    def _get_kalshi_event(self, event_ticker: str) -> Optional[Dict]:
+        cached = self._kalshi_event_cache.get(event_ticker)
+        if cached is not None:
+            return cached
+        try:
+            resp = requests.get(
+                f"{self.KALSHI_API_BASE}/events/{event_ticker}",
+                timeout=5
+            )
+            if resp.status_code != 200:
+                self._kalshi_event_cache[event_ticker] = None
+                return None
+            event = (resp.json() or {}).get("event")
+            self._kalshi_event_cache[event_ticker] = event
+            return event
+        except Exception:
+            self._kalshi_event_cache[event_ticker] = None
+            return None
+
+    def _get_kalshi_series_title(self, series_ticker: str) -> Optional[str]:
+        cached = self._kalshi_series_title_cache.get(series_ticker)
+        if cached is not None:
+            return cached
+        try:
+            resp = requests.get(
+                f"{self.KALSHI_API_BASE}/series/{series_ticker}",
+                timeout=5
+            )
+            if resp.status_code != 200:
+                self._kalshi_series_title_cache[series_ticker] = None
+                return None
+            title = (resp.json() or {}).get("series", {}).get("title")
+            self._kalshi_series_title_cache[series_ticker] = title
+            return title
+        except Exception:
+            self._kalshi_series_title_cache[series_ticker] = None
+            return None
+
+    def _build_kalshi_event_url(self, raw: Dict) -> Optional[str]:
+        event_ticker = raw.get("event_ticker") or raw.get("ticker")
+        if not event_ticker:
+            return None
+
+        event = self._get_kalshi_event(event_ticker)
+        series_ticker = (event or {}).get("series_ticker") or raw.get("series_ticker")
+        if not series_ticker:
+            return None
+
+        series_title = self._get_kalshi_series_title(series_ticker)
+        if not series_title:
+            return None
+
+        series_slug = self._slugify_kalshi_title(series_title)
+        if not series_slug:
+            return None
+
+        return (
+            f"https://kalshi.com/markets/"
+            f"{series_ticker.lower()}/{series_slug}/{event_ticker.lower()}"
+        )
     
     def _get_market_url(self, market: Market) -> Optional[str]:
         try:
@@ -63,9 +134,7 @@ class AlertManager:
                     return f"https://polymarket.com/event/{cid}"
             
             elif market.platform == 'kalshi':
-                ticker = raw.get('ticker', '')
-                if ticker:
-                    return f"https://kalshi.com/markets/{ticker.lower()}"
+                return self._build_kalshi_event_url(raw)
             
             return None
         except Exception:
@@ -383,9 +452,7 @@ class AlertManager:
             else:
                 logger.warning(f"No slug or condition_id for Polymarket market: {item.market_title[:50]}")
         elif platform == 'kalshi':
-            ticker = raw.get('ticker', '')
-            if ticker:
-                url = f"https://kalshi.com/markets/{ticker.lower()}"
+            url = self._build_kalshi_event_url(raw)
         
         # Title
         title = item.market_title[:50] + ('...' if len(item.market_title) > 50 else '')
